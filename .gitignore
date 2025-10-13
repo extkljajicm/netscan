@@ -140,6 +140,7 @@ __pycache__/
 
 # Go
 .magefile
+netscan
 
 # Grafana
 .grafana-*

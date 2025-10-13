@@ -6,11 +6,14 @@ import (
 
 	"github.com/go-ping/ping"
 	"github.com/marko/netscan/internal/config"
-	"github.com/marko/netscan/internal/influx"
 	"github.com/marko/netscan/internal/state"
 )
 
-func StartPinger(device state.Device, cfg *config.Config, writer *influx.Writer, ctx context.Context) {
+type PingWriter interface {
+	WritePingResult(ip, hostname string, rtt time.Duration, successful bool) error
+}
+
+func StartPinger(device state.Device, cfg *config.Config, writer PingWriter, ctx context.Context) {
 	ticker := time.NewTicker(cfg.PingInterval)
 	defer ticker.Stop()
 	for {

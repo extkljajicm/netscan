@@ -11,7 +11,7 @@ snmp:
   retries: 1
 
 # ICMP Ping settings
-ping_interval: "30s"
+ping_interval: "2s"
 ping_timeout: "2s"
 
 # InfluxDB settings
