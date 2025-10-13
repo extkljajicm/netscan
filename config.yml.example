@@ -1,0 +1,22 @@
+# Scan settings
+discovery_interval: "4h"  # How often to run the full SNMP discovery scan.
+networks:
+  - "10.20.0.0/18"
+
+# SNMP settings (v2c)
+snmp:
+  community: "public"
+  port: 161
+  timeout: "5s"
+  retries: 1
+
+# ICMP Ping settings
+ping_interval: "30s"
+ping_timeout: "2s"
+
+# InfluxDB settings
+influxdb:
+  url: "http://localhost:8086"
+  token: "YOUR_INFLUXDB_API_TOKEN"
+  org: "your-org"
+  bucket: "netscan"
