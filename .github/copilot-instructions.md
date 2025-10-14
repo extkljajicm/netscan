@@ -1,152 +1,248 @@
 GitHub Copilot Instructions for Project: netscan
-Project Goal
-Create a robust, long-running network monitoring service in Go. The service will perform periodic SNMP discovery on large network ranges to find active devices. For each discovered device, it will initiate continuous ICMP pinging and write the performance metrics to an InfluxDB time-series database. The final output should be a single executable file for easy deployment.
 
-Core Features
-Configuration: Load all parameters (network ranges, intervals, SNMP credentials, InfluxDB details) from a single config.yml file.
+## Project Goal
+Create a robust, long-running network monitoring service in Go with comprehensive security. The service performs periodic SNMP discovery on large network ranges to find active devices. For each discovered device, it initiates continuous ICMP pinging and writes performance metrics to an InfluxDB time-series database. The final output is a single executable file for easy deployment.
 
-Periodic Discovery: On a configurable interval (e.g., every 4 hours), scan the defined /18 subnet using a high-concurrency worker pool to find devices via SNMPv2c.
+## Core Features
+- **Configuration**: Load all parameters from config.yml with environment variable support
+- **Periodic Discovery**: Scan defined CIDR ranges using high-concurrency worker pools to find devices via SNMPv2c
+- **State Management**: Thread-safe in-memory device registry with automatic lifecycle management
+- **Continuous Monitoring**: Dedicated goroutines for ICMP ping monitoring with configurable intervals
+- **Data Persistence**: Write ping results to InfluxDB with optimized dual-measurement strategy
+- **Security**: Comprehensive input validation, resource protection, and secure credential management
+- **Deployment**: Automated systemd service installation with capability management
 
-State Management: Maintain a thread-safe, in-memory list of currently active devices. The system must automatically start monitoring new devices and stop monitoring devices that are no longer found.
+## Technology Stack
+**Language**: Go 1.21+
 
-Continuous Monitoring: For every active device, run a dedicated goroutine that performs an ICMP ping on a separate, frequent interval (e.g., every 30 seconds).
+**Key Libraries**:
+- `gopkg.in/yaml.v3` - YAML configuration parsing
+- `github.com/gosnmp/gosnmp` - SNMPv2c protocol implementation
+- `github.com/prometheus-community/pro-bing` - ICMP ping functionality
+- `github.com/influxdata/influxdb-client-go/v2` - InfluxDB v2 client
 
-Data Persistence: Write the results of every ICMP ping (Round-Trip Time, success/failure) to an InfluxDB bucket.
+## Security Architecture
+**Phase 1 - Configuration Security**: Environment variable expansion with secure .env files
+**Phase 2 - Input Validation**: Comprehensive validation and sanitization across all inputs
+**Phase 3 - Resource Protection**: Rate limiting, memory bounds, and DoS prevention
+- Discovery scan rate limiting with configurable minimum intervals
+- Concurrent pinger limits to prevent goroutine exhaustion
+- Device count limits with automatic cleanup
+- InfluxDB write rate limiting (100 writes/second)
+- Memory usage monitoring with configurable limits
 
-Technology Stack
-Language: Go
-
-Key Libraries:
-
-gopkg.in/yaml.v3 (for config parsing)
-
-github.com/gosnmp/gosnmp (for SNMPv2c)
-
-github.com/go-ping/ping (for ICMP)
-
-github.com/influxdata/influxdb-client-go/v2 (for InfluxDB)
-
-Desired Project Structure
-/netscan
+## Current Project Structure
+```
+/home/marko/Projects/netscan/
 ├── cmd/netscan/
-│   └── main.go         # Main application entry point and service orchestration.
+│   ├── main.go           # Service orchestration, signal handling, discovery loops
+│   └── main_test.go      # Basic package tests
 ├── internal/
 │   ├── config/
-│   │   └── config.go   # Logic for loading and parsing config.yml.
+│   │   ├── config.go     # YAML parsing, environment expansion, validation
+│   │   └── config_test.go # Configuration parsing tests
 │   ├── discovery/
-│   │   └── scanner.go  # The periodic, concurrent SNMP scanner.
+│   │   ├── scanner.go    # ICMP/SNMP concurrent scanning workers
+│   │   └── scanner_test.go # Discovery algorithm tests
 │   ├── influx/
-│   │   └── writer.go   # A simple wrapper for the InfluxDB client.
+│   │   ├── writer.go     # InfluxDB client with rate limiting and validation
+│   │   └── writer_test.go # Database write operation tests
 │   ├── monitoring/
-│   │   └── pinger.go   # The continuous ICMP pinger logic.
+│   │   ├── pinger.go     # ICMP ping goroutines with metrics collection
+│   │   └── pinger_test.go # Ping monitoring tests
 │   └── state/
-│       └── manager.go  # The thread-safe state manager for active devices.
+│       ├── manager.go    # Thread-safe device registry with resource limits
+│       └── manager_test.go # State management concurrency tests
+├── .github/
+│   ├── copilot-instructions.md  # This file
+│   └── workflows/
+│       └── ci-cd.yml       # GitHub Actions pipeline
+├── docker-compose.yml      # Test InfluxDB environment
+├── build.sh               # Simple binary build script
+├── deploy.sh              # Production deployment automation
+├── undeploy.sh            # Complete uninstallation script
+├── config.yml.example     # Configuration template
+├── cliff.toml            # Changelog generation configuration
 ├── go.mod
 ├── go.sum
-└── config.yml.example
-Step-by-Step Implementation Plan
-Step 1: Initialize Project and config.yml.example
-Initialize the Go module: go mod init github.com/extkljajicm/netscan.
+├── README.md
+├── CHANGELOG.md
+└── LICENSE.md
+```
 
-Add the required dependencies using go get.
+## Step-by-Step Implementation Plan
+
+### Step 1: Initialize Project and Dependencies
+Initialize the Go module: `go mod init github.com/extkljajicm/netscan`.
+
+Add the required dependencies:
+```bash
+go get gopkg.in/yaml.v3
+go get github.com/gosnmp/gosnmp
+go get github.com/prometheus-community/pro-bing
+go get github.com/influxdata/influxdb-client-go/v2
+```
 
 Create the config.yml.example file with the following structure:
 
-YAML
+```yaml
+# config.yml.example - netscan network monitoring configuration
+#
+# SECURITY NOTE: Sensitive credentials are loaded from a separate .env file
+# for enhanced security. The .env file is created during deployment with
+# restrictive permissions (600) and contains default test values that match
+# docker-compose.yml. For production use, update the .env file with secure
+# credentials.
+#
+# Required environment variables in .env file:
+# - INFLUXDB_TOKEN=netscan-token (default for testing)
+# - INFLUXDB_ORG=test-org (default for testing)
+# - SNMP_COMMUNITY=public (default for testing - change for production security)
+#
+# DO NOT store actual credentials in this config.yml file!
 
-# Scan settings
-discovery_interval: "4h"  # How often to run the full SNMP discovery scan.
+# =============================================================================
+# DISCOVERY SETTINGS
+# =============================================================================
+# How often to run the full SNMP discovery scan (ICMP sweep + SNMP polling)
+discovery_interval: "4h"
+
+# How often to run ICMP discovery in --icmp-only mode
+icmp_discovery_interval: "5m"
+
+# Network ranges to scan (CIDR notation) - supports multiple subnets
 networks:
-  - "10.20.0.0/18"
+  - "192.168.0.0/24"
+  - "10.0.0.0/16"
+  - "172.16.0.0/12"
 
-# SNMP settings (v2c)
+# =============================================================================
+# PERFORMANCE TUNING
+# =============================================================================
+# Number of concurrent ICMP ping workers (recommended: 2-4x CPU cores)
+icmp_workers: 64
+
+# Number of concurrent SNMP polling workers (recommended: 1-2x CPU cores)
+snmp_workers: 32
+
+# =============================================================================
+# MONITORING SETTINGS
+# =============================================================================
+# Ping frequency per monitored device
+ping_interval: "2s"
+
+# Timeout for individual ping operations
+ping_timeout: "2s"
+
+# =============================================================================
+# SNMP SETTINGS
+# =============================================================================
+# SNMPv2c community string for device authentication
+# Sensitive values are loaded from .env file (see Environment Variables section)
 snmp:
-  community: "public"
+  community: "${SNMP_COMMUNITY}"  # Loaded from .env file - default is 'public' for testing
   port: 161
   timeout: "5s"
   retries: 1
 
-# ICMP Ping settings
-ping_interval: "30s"
-ping_timeout: "2s"
-
-# InfluxDB settings
+# =============================================================================
+# INFLUXDB SETTINGS
+# =============================================================================
+# Time-series database for metrics storage
+# Sensitive values are loaded from .env file (see Environment Variables section)
 influxdb:
   url: "http://localhost:8086"
-  token: "YOUR_INFLUXDB_API_TOKEN"
-  org: "your-org"
+  token: "${INFLUXDB_TOKEN}"  # Loaded from .env file
+  org: "${INFLUXDB_ORG}"      # Loaded from .env file
   bucket: "netscan"
-Step 2: Implement Configuration (internal/config/config.go)
-Create a Go struct that mirrors the config.yml structure. Implement a LoadConfig(path string) (*Config, error) function that reads the file, parses it using yaml.v3, and returns the populated struct. Use time.ParseDuration for interval strings.
 
-Step 3: Implement the State Manager (internal/state/manager.go)
-This is the core of the service.
+# =============================================================================
+# RESOURCE PROTECTION SETTINGS
+# =============================================================================
+# Limits to prevent resource exhaustion and DoS attacks
+max_concurrent_pingers: 1000  # Maximum number of concurrent ping goroutines
+max_devices: 10000            # Maximum number of devices to monitor
+min_scan_interval: "1m"       # Minimum interval between discovery scans
+memory_limit_mb: 512          # Memory usage limit in MB
+```
 
-Define a Device struct: { IP string, Hostname string, SysDescr string, SysObjectID string }.
+### Step 2: Implement Configuration (internal/config/config.go)
+Create a Go struct that mirrors the config.yml structure with environment variable expansion. Implement:
+- `LoadConfig(path string) (*Config, error)` - reads and parses YAML with env var support
+- `ValidateConfig(cfg *Config) (string, error)` - validates configuration and security constraints
+- Use `time.ParseDuration` for interval strings and `os.ExpandEnv` for variable expansion
 
-Create a Manager struct that contains a map like devices map[string]*Device and a sync.RWMutex to ensure thread safety.
+### Step 3: Implement the State Manager (internal/state/manager.go)
+Thread-safe device registry with resource limits:
 
-Implement methods on the Manager:
+Define `Device` struct: `{ IP, Hostname, SysDescr, SysObjectID string }`
 
-Add(device Device): Adds a new device if it doesn't exist.
+Create `Manager` struct with:
+- `devices map[string]*Device` with `sync.RWMutex`
+- `maxDevices int` parameter for resource protection
 
-Get(ip string) (*Device, bool): Gets a device by IP.
+Implement methods:
+- `NewManager(maxDevices int) *Manager`
+- `Add(device Device)` - with device count limits
+- `Get(ip string) (*Device, bool)`
+- `GetAll() []Device`
+- `UpdateLastSeen(ip string)`
+- `Prune(olderThan time.Duration)` - removes stale devices
 
-GetAll() []Device: Returns a slice of all active devices.
+### Step 4: Implement InfluxDB Writer (internal/influx/writer.go)
+InfluxDB client with rate limiting and validation:
 
-UpdateLastSeen(ip string): A mechanism to track when a device was last found.
+Create `Writer` struct with:
+- InfluxDB client and write API
+- Rate limiter (100 writes/second)
+- Input validation and sanitization
 
-Prune(olderThan time.Duration): A method to remove devices that haven't been seen by the discovery scanner for a certain duration.
+Implement methods:
+- `NewWriter(url, token, org, bucket string) *Writer`
+- `WriteDeviceInfo(ip, hostname, sysName, sysDescr, sysObjectID string)` - metadata writes
+- `WritePingResult(ip string, rtt time.Duration, successful bool)` - metrics writes
+- `validateIPAddress(ip string) error` - security validation
+- `sanitizeInfluxString(s, fieldName string) string` - data sanitization
 
-Step 4: Implement InfluxDB Writer (internal/influx/writer.go)
-Create a Writer struct that holds the InfluxDB client API. Implement a single method: WritePingResult(ip, hostname string, rtt time.Duration, successful bool). This method should create a new Point and write it to InfluxDB.
+### Step 5: Implement the Pinger (internal/monitoring/pinger.go)
+ICMP monitoring with resource management:
 
-Step 5: Implement the Pinger (internal/monitoring/pinger.go)
-Create a function StartPinger(device state.Device, config *config.Config, writer *influx.Writer, ctx context.Context).
-This function will be launched in its own goroutine for each device. It should contain a loop that:
+Create `StartPinger(device state.Device, config *config.Config, writer *influx.Writer, ctx context.Context)`:
+- Dedicated goroutine per device
+- `time.NewTicker` based on `ping_interval`
+- Uses `github.com/prometheus-community/pro-bing` for ICMP
+- Calls `writer.WritePingResult()` with outcomes
+- Respects `max_concurrent_pingers` limit
+- Graceful shutdown on context cancellation
 
-Uses a time.NewTicker based on the ping_interval.
+### Step 6: Implement the Discovery Scanner (internal/discovery/scanner.go)
+Concurrent network scanning with security validation:
 
-In each tick, it uses github.com/go-ping/ping to ping the device's IP.
+Create `RunFullDiscovery(config *config.Config) []state.Device`:
+- Concurrent worker pool pattern (64 ICMP + 32 SNMP workers)
+- Channels for jobs and results
+- Producer generates IPs from CIDR ranges
+- Workers perform SNMP Get requests for `sysName`, `sysDescr`, `sysObjectID`
+- Input validation and rate limiting
+- Returns discovered devices slice
 
-Calls writer.WritePingResult() with the outcome.
+Create `RunPingDiscovery(network string, workers int) []state.Device`:
+- ICMP-only discovery for `--icmp-only` mode
+- Concurrent ping sweeps
+- Returns online devices for basic connectivity monitoring
 
-Listens for the context to be cancelled to gracefully shut down the goroutine.
+### Step 7: Orchestrate in main.go (cmd/netscan/main.go)
+Service orchestration with comprehensive security:
 
-Step 6: Implement the Discovery Scanner (internal/discovery/scanner.go)
-Create a RunScan(config *config.Config) function.
-
-This function will implement the concurrent worker pool pattern. Create channels for jobs (IPs to scan) and results.
-
-Launch a large number of worker goroutines.
-
-A producer goroutine will generate all IPs from the CIDR ranges in the config and put them on the jobs channel.
-
-Each worker will take an IP, perform an SNMP Get request for sysName, sysDescr, and sysObjectID.
-
-If successful, it will package the data into a state.Device struct and send it to a results channel.
-
-The main RunScan function will collect all results into a slice and return it.
-
-Step 7: Orchestrate in main.go
-The main function in cmd/netscan/main.go will tie everything together:
-
-Load the configuration.
-
-Initialize the state manager and the InfluxDB writer.
-
-Create a map to keep track of running pinger goroutines, e.g., activePingers map[string]context.CancelFunc.
-
-Start a main loop controlled by a time.NewTicker set to the discovery_interval.
-
-On each tick:
-
-Run the discovery scan to get a fresh list of found devices.
-
-Iterate through the new list. For each device, check if a pinger is already running for it in your activePingers map. If not, launch a new pinger goroutine for it using go monitoring.StartPinger(...) and store its cancel function in the map.
-
-Update a "last seen" timestamp for all devices found in the scan.
-
-After the scan, call a prune function on the state manager to remove old devices whose pingers should be stopped (using the stored cancel function).
-
-Implement graceful shutdown on receiving an interrupt signal (SIGINT).
+Main function responsibilities:
+- Load and validate configuration
+- Initialize state manager and InfluxDB writer
+- Set up signal handling (SIGINT/SIGTERM)
+- Create `activePingers map[string]context.CancelFunc` for goroutine management
+- Implement dual discovery modes:
+  - Full mode: ICMP sweep + SNMP polling on `discovery_interval`
+  - ICMP-only mode: Ping sweeps only on `icmp_discovery_interval`
+- Resource monitoring: `checkMemoryUsage()` function
+- Rate limiting: `min_scan_interval` enforcement
+- Device lifecycle: Start pingers for new devices, prune offline devices
+- Graceful shutdown: Cancel all pingers and cleanup resources
