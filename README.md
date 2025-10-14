@@ -116,10 +116,19 @@ Sensitive configuration values are loaded from a `.env` file created during depl
 
 ```bash
 # .env file (created by deploy.sh with 600 permissions)
-INFLUXDB_TOKEN=netscan-token      # Default for testing (matches docker-compose.yml)
-INFLUXDB_ORG=test-org            # Default for testing (matches docker-compose.yml)
-SNMP_COMMUNITY=your-community    # Must be changed for security
+INFLUXDB_URL=http://localhost:8086      # InfluxDB server URL
+INFLUXDB_TOKEN=netscan-token            # InfluxDB API token
+INFLUXDB_ORG=test-org                   # InfluxDB organization
+INFLUXDB_BUCKET=netscan                 # InfluxDB bucket name
+SNMP_COMMUNITY=your-community           # SNMPv2c community string
 ```
+
+**Supported Environment Variables:**
+- `INFLUXDB_URL`: InfluxDB server endpoint
+- `INFLUXDB_TOKEN`: API token for authentication
+- `INFLUXDB_ORG`: Organization name
+- `INFLUXDB_BUCKET`: Target bucket for metrics
+- `SNMP_COMMUNITY`: SNMPv2c community string for device access
 
 **Security Best Practices:**
 - Never commit `.env` files to version control
@@ -232,6 +241,11 @@ ICMP discovery only, configurable via `icmp_discovery_interval`.
 ./netscan -config /path/to/config.yml
 ```
 
+### Command Line Options
+
+- `-config string`: Path to configuration file (default "config.yml")
+- `-icmp-only`: Skip SNMP discovery, run ICMP-only monitoring mode
+
 ## Deployment
 
 ### Automated (Recommended)
@@ -295,7 +309,32 @@ sudo systemctl restart netscan
 sudo systemctl stop netscan
 ```
 
+## Building
+
+### Automated Build
+
+```bash
+./build.sh
+```
+
+Builds the netscan binary with optimized settings.
+
+### Manual Build
+
+```bash
+go build -o netscan ./cmd/netscan
+```
+
+### Cross-Platform Builds
+
+The CI/CD pipeline builds for Linux amd64 only.
+
+**Current Build Target:**
+- Linux (amd64)
+
 ## Testing
+
+### Unit Tests
 
 ```bash
 go test ./...                    # All tests
@@ -305,8 +344,36 @@ go test -race ./...              # Race detection
 go test -cover ./...             # Coverage report
 ```
 
-## Troubleshooting
+**Test Coverage:**
+- Configuration parsing and validation
+- Network discovery algorithms
+- State management concurrency
+- InfluxDB client operations
+- ICMP ping monitoring
+- SNMP polling functionality
 
+### Integration Testing
+
+```bash
+# Start test InfluxDB
+sudo docker-compose up -d
+
+# Run netscan with test config
+./netscan -config config.yml
+```
+
+### CI/CD Pipeline
+
+Automated testing runs on:
+- Push to main branch
+- Pull requests to main
+- Version tags (v*)
+
+**CI/CD Features:**
+- Linux amd64 binary builds
+- Automated changelog generation (git-cliff)
+- Code coverage reporting
+- Release artifact creation
 ### ICMP Permission Denied
 ```bash
 # Manual execution
@@ -366,12 +433,6 @@ Monitor actual CPU usage and adjust based on your specific environment.
 
 #### Performance Characteristics (Estimated)
 
-**Note**: Performance numbers are estimates based on typical Go application behavior and network monitoring patterns. Actual performance varies by:
-- Network latency and reliability
-- Device response times
-- System I/O capabilities
-- Go runtime scheduling overhead
-
 | System Type | CPU Cores | ICMP Workers | SNMP Workers | Est. CPU % | Concurrent Ops |
 |-------------|-----------|--------------|--------------|------------|----------------|
 | Raspberry Pi 4 | 4 | 4-8 | 2-4 | 10-25% | 6-12 |
@@ -386,14 +447,8 @@ Monitor actual CPU usage and adjust based on your specific environment.
 watch -n 1 "ps aux | grep netscan | grep -v grep"
 
 # Test different worker counts
-# Start with conservative values and increase gradually
 icmp_workers: 8   # Start low, monitor CPU
 snmp_workers: 4   # SNMP is more CPU intensive
-
-# Use system monitoring tools
-htop    # Real-time CPU/memory monitoring
-iotop   # I/O monitoring
-nload   # Network bandwidth monitoring
 ```
 
 #### Performance Factors
@@ -507,9 +562,9 @@ chore: update dependencies
 3. Automated release process:
    - Changelog generation from conventional commits
    - CHANGELOG.md update with new version section
-   - Multi-platform binary builds (Linux/macOS/Windows, AMD64/ARM64)
-   - Release archives creation (.tar.gz packages)
-   - GitHub release creation with attached binaries
+   - Linux amd64 binary build and packaging
+   - Release archive creation (.tar.gz package)
+   - GitHub release creation with attached binary
 
 #### Version Strategy
 - Alpha/Beta: v0.x.x-alpha.x, v0.x.x-beta.x
@@ -527,17 +582,33 @@ go mod tidy     # Clean dependencies
 ### Project Structure
 ```
 netscan/
-├── cmd/netscan/           # CLI application
-├── internal/              # Private packages
-│   ├── config/           # Configuration parsing
-│   ├── discovery/        # Network scanning
-│   ├── monitoring/       # Ping monitoring
-│   ├── state/            # Device state
-│   └── influx/           # Metrics storage
-├── docker-compose.yml    # Test environment
-├── build.sh             # Build automation
-├── deploy.sh            # Deployment script
-└── config.yml.example   # Configuration template
+├── cmd/netscan/           # CLI application and main orchestration
+│   ├── main.go           # Service startup, signal handling, discovery loops
+│   └── main_test.go      # Basic package test placeholder
+├── internal/              # Private application packages
+│   ├── config/           # Configuration parsing and validation
+│   │   ├── config.go     # YAML loading, environment expansion, validation
+│   │   └── config_test.go # Configuration parsing tests
+│   ├── discovery/        # Network device discovery
+│   │   ├── scanner.go    # ICMP/SNMP concurrent scanning workers
+│   │   └── scanner_test.go # Discovery algorithm tests
+│   ├── monitoring/       # Continuous device monitoring
+│   │   ├── pinger.go     # ICMP ping goroutines with metrics collection
+│   │   └── pinger_test.go # Ping monitoring tests
+│   ├── state/            # Thread-safe device state management
+│   │   ├── manager.go    # RWMutex-protected device registry
+│   │   └── manager_test.go # State management concurrency tests
+│   └── influx/           # Time-series data persistence
+│       ├── writer.go     # InfluxDB client wrapper with rate limiting
+│       └── writer_test.go # Database write operation tests
+├── docker-compose.yml    # Test environment (InfluxDB v2.7)
+├── build.sh             # Simple binary build script
+├── deploy.sh            # Production deployment automation
+├── undeploy.sh          # Complete uninstallation script
+├── config.yml.example   # Configuration template
+├── cliff.toml           # Changelog generation configuration
+└── .github/workflows/   # CI/CD automation
+    └── ci-cd.yml        # GitHub Actions pipeline
 ```
 
 ## License

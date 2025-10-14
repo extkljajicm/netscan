@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `device_info` measurement: Device metadata stored once per discovery (low-frequency)
   - Eliminates redundant SNMP data storage on every ping measurement
 - **CI/CD Pipeline**: GitHub Actions workflow for automated testing, building, and releases
-  - Multi-platform binary builds (Linux/macOS/Windows, AMD64/ARM64)
+  - Linux amd64 binary builds
   - Automated changelog generation with git-cliff
   - Release automation with version tagging
   - Code coverage reporting
@@ -77,21 +77,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Technical Implementation Details
 - **Two-Phase Discovery**: ICMP ping sweep first (64 workers), then SNMP polling only on online devices (32 workers)
-  - Eliminates SNMP timeouts on offline devices
-  - Faster initial network mapping
-  - Graceful fallback for SNMP-unavailable devices
-- **Concurrency Pattern**: Producer-consumer model with buffered channels
-  - Job channel for IP addresses, results channel for discovered devices
-  - Context-based cancellation for graceful shutdown
+- **Concurrency Pattern**: Producer-consumer model with buffered channels (256 slots)
 - **Error Handling**: Multi-layer error propagation with logging
-  - ICMP packet loss handling, SNMP timeout/retry logic
-  - InfluxDB write failures with exponential backoff
 - **Resource Management**: Proper goroutine lifecycle with sync.WaitGroup
-  - Ticker-based scheduling for periodic operations
-  - Signal handling for SIGINT/SIGTERM with cleanup
 - **Security Model**: Linux capabilities for privilege separation
-  - CAP_NET_RAW for raw socket access without full root privileges
-  - Dedicated service user isolation
+- **Configuration Processing**: YAML parsing with environment variable expansion
+- **Metrics Optimization**: Dual measurement strategy for InfluxDB
 
 ### Known Issues
 - IPv4-only implementation
