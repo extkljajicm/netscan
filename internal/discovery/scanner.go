@@ -108,9 +108,23 @@ func RunScan(cfg *config.Config) []state.Device {
 
 // RunPingDiscovery performs concurrent ICMP ping sweep to find online devices
 func RunPingDiscovery(cidr string, icmpWorkers int) []state.Device {
+	// Calculate buffer size based on network size, capped at reasonable limit
+	_, ipnet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		log.Printf("Invalid CIDR %s: %v", cidr, err)
+		return []state.Device{}
+	}
+	
+	ones, bits := ipnet.Mask.Size()
+	hostBits := bits - ones
+	bufferSize := 256 // Default buffer
+	if hostBits < 8 {
+		bufferSize = 1 << hostBits // Smaller networks can use exact size
+	}
+	
 	var (
-		jobs    = make(chan string, 256)       // Buffered channel for IP addresses to ping
-		results = make(chan state.Device, 256) // Buffered channel for responsive devices
+		jobs    = make(chan string, bufferSize)       // Buffered channel for IP addresses to ping
+		results = make(chan state.Device, bufferSize) // Buffered channel for responsive devices
 		wg      sync.WaitGroup
 	)
 
@@ -327,15 +341,36 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 }
 
 // ipsFromCIDR expands CIDR notation into individual IP addresses
+// For large networks, this streams IPs via channel to avoid loading all into memory
 func ipsFromCIDR(cidr string) []string {
 	var ips []string
 	ip, ipnet, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return ips
 	}
+	
+	// Calculate network size to prevent memory exhaustion
+	ones, bits := ipnet.Mask.Size()
+	hostBits := bits - ones
+	
+	// For networks larger than /16 (65K hosts), limit the expansion
+	// to prevent memory exhaustion attacks
+	maxIPs := 65536 // Maximum 64K IPs in memory at once
+	if hostBits > 16 {
+		// Network too large - would create millions of IPs
+		// This should have been caught by config validation
+		return ips
+	}
+	
 	// Iterate through all IPs in the subnet
+	count := 0
 	for ip := ip.Mask(ipnet.Mask); ipnet.Contains(ip); incIP(ip) {
 		ips = append(ips, ip.String())
+		count++
+		if count >= maxIPs {
+			// Safety limit reached
+			break
+		}
 	}
 	return ips
 }

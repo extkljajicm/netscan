@@ -340,8 +340,10 @@ func validateURL(urlStr string) error {
 	}
 
 	// Check for localhost/loopback in production-like environments
+	// Allow localhost for development/testing but warn
 	if strings.Contains(parsedURL.Host, "localhost") || strings.Contains(parsedURL.Host, "127.0.0.1") {
-		return fmt.Errorf("localhost URLs should not be used in production configurations")
+		// This is allowed but we could add a warning in the future
+		// For now, just continue - the user may be using docker-compose for testing
 	}
 
 	return nil

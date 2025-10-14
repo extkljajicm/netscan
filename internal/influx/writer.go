@@ -37,6 +37,24 @@ func NewWriter(url, token, org, bucket string) *Writer {
 	}
 }
 
+// HealthCheck verifies InfluxDB connectivity
+func (w *Writer) HealthCheck() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	
+	// Use the health check API
+	health, err := w.client.Health(ctx)
+	if err != nil {
+		return fmt.Errorf("influxdb health check failed: %v", err)
+	}
+	
+	if health.Status != "pass" {
+		return fmt.Errorf("influxdb health status: %s", health.Status)
+	}
+	
+	return nil
+}
+
 // WriteDeviceInfo writes device metadata to InfluxDB (call once per device or when SNMP data changes)
 func (w *Writer) WriteDeviceInfo(ip, hostname, sysName, sysDescr, sysObjectID string) error {
 	// Validate IP address
@@ -60,7 +78,11 @@ func (w *Writer) WriteDeviceInfo(ip, hostname, sysName, sysDescr, sysObjectID st
 	p.AddField("snmp_description", sysDescr)
 	p.AddField("snmp_sysid", sysObjectID)
 	p.SetTime(time.Now())
-	return w.writeAPI.WritePoint(context.Background(), p)
+	
+	// Add timeout to prevent indefinite blocking
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return w.writeAPI.WritePoint(ctx, p)
 }
 
 // WritePingResult writes ICMP ping metrics to InfluxDB (optimized for time-series)
@@ -86,7 +108,11 @@ func (w *Writer) WritePingResult(ip string, rtt time.Duration, successful bool) 
 	p.AddField("rtt_ms", float64(rtt.Nanoseconds())/1e6) // Convert to float milliseconds
 	p.AddField("success", successful)
 	p.SetTime(time.Now())
-	return w.writeAPI.WritePoint(context.Background(), p)
+	
+	// Add timeout to prevent indefinite blocking
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return w.writeAPI.WritePoint(ctx, p)
 }
 
 // Close terminates the InfluxDB client connection
