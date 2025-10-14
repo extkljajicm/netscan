@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
@@ -40,8 +41,17 @@ func main() {
 	writer := influx.NewWriter(cfg.InfluxDB.URL, cfg.InfluxDB.Token, cfg.InfluxDB.Org, cfg.InfluxDB.Bucket)
 	defer writer.Close()
 
+	// Verify InfluxDB connectivity at startup
+	log.Println("Checking InfluxDB connectivity...")
+	if err := writer.HealthCheck(); err != nil {
+		log.Fatalf("InfluxDB connection failed: %v", err)
+	}
+	log.Println("InfluxDB connection successful ✓")
+
 	// Map IP addresses to their pinger cancellation functions for cleanup
+	// Protected by mutex to prevent concurrent map access
 	activePingers := make(map[string]context.CancelFunc)
+	var pingersMu sync.Mutex
 
 	// Setup signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -51,6 +61,9 @@ func main() {
 
 	// Helper function to start a pinger with resource limits
 	startPinger := func(dev state.Device) {
+		pingersMu.Lock()
+		defer pingersMu.Unlock()
+		
 		if len(activePingers) >= cfg.MaxConcurrentPingers {
 			log.Printf("Maximum concurrent pingers (%d) reached, skipping %s", cfg.MaxConcurrentPingers, dev.IP)
 			return
@@ -107,9 +120,11 @@ func main() {
 			select {
 			case <-ctx.Done():
 				log.Println("Shutdown signal received. Stopping pingers and exiting.")
+				pingersMu.Lock()
 				for _, cancel := range activePingers {
 					cancel()
 				}
+				pingersMu.Unlock()
 				return
 			case <-discoveryTicker.C:
 				// Rate limiting check
@@ -140,10 +155,12 @@ func main() {
 				pruned := mgr.Prune(2 * cfg.IcmpDiscoveryInterval)
 				for _, old := range pruned {
 					log.Printf("Pruning offline device: %s", old.IP)
+					pingersMu.Lock()
 					if cancel, ok := activePingers[old.IP]; ok {
 						cancel()
 						delete(activePingers, old.IP)
 					}
+					pingersMu.Unlock()
 				}
 			}
 		}
@@ -161,7 +178,10 @@ func main() {
 		if err := writer.WriteDeviceInfo(dev.IP, dev.Hostname, dev.Hostname, dev.SysDescr, dev.SysObjectID); err != nil {
 			log.Printf("Failed to write device info for %s: %v", dev.IP, err)
 		}
-		if _, running := activePingers[dev.IP]; !running {
+		pingersMu.Lock()
+		_, running := activePingers[dev.IP]
+		pingersMu.Unlock()
+		if !running {
 			startPinger(dev)
 		}
 	}
@@ -177,9 +197,11 @@ func main() {
 		select {
 		case <-ctx.Done():
 			log.Println("Shutdown signal received. Stopping pingers and exiting.")
+			pingersMu.Lock()
 			for _, cancel := range activePingers {
 				cancel()
 			}
+			pingersMu.Unlock()
 			return
 		case <-discoveryTicker.C:
 			// Rate limiting check
@@ -203,7 +225,10 @@ func main() {
 				if err := writer.WriteDeviceInfo(dev.IP, dev.Hostname, dev.Hostname, dev.SysDescr, dev.SysObjectID); err != nil {
 					log.Printf("Failed to write device info for %s: %v", dev.IP, err)
 				}
-				if _, running := activePingers[dev.IP]; !running {
+				pingersMu.Lock()
+				_, running := activePingers[dev.IP]
+				pingersMu.Unlock()
+				if !running {
 					startPinger(dev)
 				}
 			}
@@ -211,10 +236,12 @@ func main() {
 			pruned := mgr.Prune(cfg.DiscoveryInterval * 2)
 			for _, old := range pruned {
 				log.Printf("Pruning device: %s (%s)", old.IP, old.Hostname)
+				pingersMu.Lock()
 				if cancel, ok := activePingers[old.IP]; ok {
 					cancel()
 					delete(activePingers, old.IP)
 				}
+				pingersMu.Unlock()
 			}
 		}
 	}

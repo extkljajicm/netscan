@@ -50,10 +50,14 @@ func StartPinger(device state.Device, cfg *config.Config, writer PingWriter, ctx
 			stats := pinger.Statistics()
 			if stats.PacketsRecv > 0 {
 				log.Printf("Ping success: %s RTT=%v", device.IP, stats.AvgRtt)
-				writer.WritePingResult(device.IP, stats.AvgRtt, true)
+				if err := writer.WritePingResult(device.IP, stats.AvgRtt, true); err != nil {
+					log.Printf("Failed to write ping result for %s: %v", device.IP, err)
+				}
 			} else {
 				log.Printf("Ping failed: %s", device.IP)
-				writer.WritePingResult(device.IP, 0, false)
+				if err := writer.WritePingResult(device.IP, 0, false); err != nil {
+					log.Printf("Failed to write ping failure for %s: %v", device.IP, err)
+				}
 			}
 		}
 	}
