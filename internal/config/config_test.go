@@ -12,6 +12,9 @@ func TestLoadConfigValid(t *testing.T) {
 	}
 	defer os.Remove(f.Name())
 	configYAML := `discovery_interval: "1h"
+icmp_discovery_interval: "5m"
+icmp_workers: 64
+snmp_workers: 32
 networks:
   - "192.168.1.0/30"
 snmp:

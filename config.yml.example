@@ -1,7 +1,10 @@
 # Scan settings
 discovery_interval: "4h"  # How often to run the full SNMP discovery scan.
+icmp_discovery_interval: "5m"  # How often to run ICMP discovery in --icmp-only mode.
+icmp_workers: 64  # Number of concurrent ICMP ping workers
+snmp_workers: 32  # Number of concurrent SNMP polling workers
 networks:
-  - "10.20.0.0/18"
+  - "192.168.0.0/24"
 
 # SNMP settings (v2c)
 snmp:
@@ -17,6 +20,6 @@ ping_timeout: "2s"
 # InfluxDB settings
 influxdb:
   url: "http://localhost:8086"
-  token: "YOUR_INFLUXDB_API_TOKEN"
-  org: "your-org"
+  token: "netscan-token"  # Matches docker-compose.yml admin token
+  org: "test-org"
   bucket: "netscan"

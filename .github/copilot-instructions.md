@@ -46,7 +46,7 @@ Desired Project Structure
 └── config.yml.example
 Step-by-Step Implementation Plan
 Step 1: Initialize Project and config.yml.example
-Initialize the Go module: go mod init github.com/marko/netscan.
+Initialize the Go module: go mod init github.com/extkljajicm/netscan.
 
 Add the required dependencies using go get.
 

@@ -2,32 +2,44 @@ package monitoring
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
-	"github.com/marko/netscan/internal/config"
-	"github.com/marko/netscan/internal/state"
+	"github.com/extkljajicm/netscan/internal/config"
+	"github.com/extkljajicm/netscan/internal/state"
 )
 
 type mockWriter struct {
-	called   bool
-	ip       string
-	hostname string
-	rtt      time.Duration
-	success  bool
+	called           bool
+	ip               string
+	rtt              time.Duration
+	success          bool
+	deviceInfoCalled bool
+	deviceIP         string
+	deviceHostname   string
 }
 
 // Satisfy influx.Writer interface
-func (m *mockWriter) WritePingResult(ip, hostname string, rtt time.Duration, successful bool) error {
+func (m *mockWriter) WritePingResult(ip string, rtt time.Duration, successful bool) error {
 	m.called = true
 	m.ip = ip
-	m.hostname = hostname
 	m.rtt = rtt
 	m.success = successful
 	return nil
 }
 
+func (m *mockWriter) WriteDeviceInfo(ip, hostname, sysName, sysDescr, sysObjectID string) error {
+	m.deviceInfoCalled = true
+	m.deviceIP = ip
+	m.deviceHostname = hostname
+	return nil
+}
+
 func TestStartPingerCancel(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("Test requires root privileges for ICMP ping")
+	}
 	dev := state.Device{IP: "127.0.0.1", Hostname: "localhost"}
 	cfg := &config.Config{PingInterval: 10 * time.Millisecond, PingTimeout: 1 * time.Millisecond}
 	writer := &mockWriter{}

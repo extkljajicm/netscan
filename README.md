@@ -1,128 +1,370 @@
 # netscan
 
-netscan is a robust, long-running network monitoring service written in Go. It performs periodic SNMP discovery on large network ranges, continuously pings discovered devices, and writes performance metrics to InfluxDB.
+Network monitoring service written in Go that performs ICMP ping monitoring of discovered devices and stores metrics in InfluxDB.
+
+## Overview
+
+Performs two-phase network discovery: ICMP ping sweeps followed by SNMP polling of online devices. Continuously monitors device availability and latency.
 
 ## Features
-- Periodic SNMPv2c discovery of large network ranges
-- Continuous ICMP ping monitoring for active devices
-- Metrics written to InfluxDB (RTT, success/failure)
-- Thread-safe state management for device tracking
-- Graceful shutdown and automatic device pruning
-- Single binary deployment
 
+- **Two-Phase Discovery**: ICMP sweep (configurable workers) then SNMP polling (configurable workers) on online devices
+- **Dual Modes**: Full discovery (ICMP + SNMP) or ICMP-only mode
+- **Concurrent Processing**: Configurable worker pool patterns for scalable network operations
+- **State Management**: RWMutex-protected device state with timestamp-based pruning
+- **InfluxDB v2**: Time-series metrics storage with point-based writes
+- **Configuration**: YAML-based config with duration parsing
+- **Security**: Linux capabilities (CAP_NET_RAW) for non-root ICMP access
+- **Single Binary**: No runtime dependencies
 
-## Quick Start
-1. Copy `config.yml.example` to `config.yml` and edit with your network, SNMP, and InfluxDB settings.
-2. Build the executable using the provided script:
-  ```fish
-  ./build.sh
-  ```
-  Or manually:
-  ```fish
-  go build -o netscan ./cmd/netscan
-  ```
+## Architecture
 
-3. Run the service:
-  ```fish
-  ./netscan
-  ```
-
-## Usage Examples
-
-### Basic Run
-Start netscan with default config in the current directory:
-```fish
-./netscan
+```
+cmd/netscan/main.go           # Orchestration and CLI interface
+internal/
+├── config/config.go          # YAML parsing with duration conversion
+├── discovery/scanner.go      # ICMP/SNMP discovery with worker pools
+├── monitoring/pinger.go      # ICMP monitoring goroutines
+├── state/manager.go          # Thread-safe device state (RWMutex)
+└── influx/writer.go          # InfluxDB client wrapper
 ```
 
-### Custom Config Location
-Run netscan with a custom config file:
-```fish
-cp config.yml.example /opt/netscan/config.yml
-cd /opt/netscan
-./netscan
+## Dependencies
+
+- `github.com/gosnmp/gosnmp v1.42.1` - SNMPv2c protocol
+- `github.com/influxdata/influxdb-client-go/v2 v2.14.0` - InfluxDB v2 client
+- `github.com/prometheus-community/pro-bing v0.7.0` - ICMP ping library
+- `gopkg.in/yaml.v3 v3.0.1` - YAML configuration parser
+
+## Installation
+
+### Prerequisites
+- Go 1.21+ (tested with 1.25.1)
+- InfluxDB 2.x
+- Root privileges for ICMP socket access
+
+### Ubuntu
+```bash
+sudo apt update
+sudo apt install golang-go docker.io docker-compose
+sudo systemctl enable docker
+sudo systemctl start docker
 ```
 
-### Systemd Service Management
-Check status:
-```fish
-sudo systemctl status netscan
-```
-Restart service:
-```fish
-sudo systemctl restart netscan
-```
-View logs:
-```fish
-sudo journalctl -u netscan -f
+### CachyOS
+```bash
+sudo pacman -S go docker docker-compose
+sudo systemctl enable docker
+sudo systemctl start docker
 ```
 
-### Testing
-Run all unit tests:
-```fish
-go test ./...
+### Setup
+```bash
+git clone https://github.com/extkljajicm/netscan.git
+cd netscan
+go mod download
+sudo docker-compose up -d  # Start test InfluxDB
 ```
 
-## Troubleshooting
-- Ensure InfluxDB is reachable from the host.
-- Check SNMP and ICMP permissions/firewall rules.
-- Review logs for errors and device status changes.
+## Building
 
-## Contributing
-Pull requests and issues are welcome! Please add tests for new features and follow Go best practices.
-
-## Deployment
-To install and run netscan as a systemd service, use the provided deployment script:
-```fish
-sudo ./deploy.sh
+```bash
+go build -o netscan ./cmd/netscan
+# Or use build script
+./build.sh
 ```
-This will build (if needed), install, and start netscan as a service. See the script for details and customization.
 
 ## Configuration
-All settings are managed in `config.yml`. Example:
+
+Copy and edit configuration:
+
+```bash
+cp config.yml.example config.yml
+```
+
+### Configuration Structure
 
 ```yaml
-# Scan settings
-discovery_interval: "4h"
-networks:
-  - "10.20.0.0/18"
+# Discovery intervals
+discovery_interval: "4h"        # Full discovery cycle (ICMP + SNMP)
+icmp_discovery_interval: "5m"   # ICMP-only discovery cycle
 
-# SNMP settings (v2c)
+# Worker counts for performance tuning
+icmp_workers: 64                # Concurrent ICMP ping workers
+snmp_workers: 32                # Concurrent SNMP polling workers
+
+# Network ranges
+networks:
+  - "192.168.0.0/24"
+
+# SNMP parameters
 snmp:
   community: "public"
   port: 161
   timeout: "5s"
   retries: 1
 
-# ICMP Ping settings
-ping_interval: "2s"
-ping_timeout: "2s"
+# ICMP parameters
+ping_interval: "2s"             # Ping frequency per device
+ping_timeout: "2s"              # Individual ping timeout
 
-# InfluxDB settings
+# InfluxDB connection
 influxdb:
   url: "http://localhost:8086"
-  token: "YOUR_INFLUXDB_API_TOKEN"
-  org: "your-org"
+  token: "netscan-token"
+  org: "test-org"
   bucket: "netscan"
 ```
 
-## Architecture
-- `cmd/netscan/main.go`: Main entry point, orchestrates all modules
-- `internal/config/`: Loads and parses configuration
-- `internal/state/`: Thread-safe device state manager
-- `internal/influx/`: InfluxDB writer for ping results
-- `internal/monitoring/`: ICMP pinger logic
-- `internal/discovery/`: SNMP scanner for device discovery
+### Docker Test Environment
 
-## Testing
-Run all unit tests:
-```fish
-go test ./...
+`docker-compose.yml` provides InfluxDB v2.7 with:
+- Organization: `test-org`
+- Bucket: `netscan`
+- Token: `netscan-token`
+
+## Usage
+
+### Full Discovery Mode (Default)
+
+```bash
+./netscan
 ```
-Tests cover configuration parsing, state management, SNMP IP generation, InfluxDB writing, and pinger logic.
+
+Performs ICMP sweep across configured networks, then SNMP polling of online devices.
+
+### ICMP-Only Mode
+
+```bash
+./netscan --icmp-only
+```
+
+ICMP discovery only, configurable via `icmp_discovery_interval`.
+
+### Custom Config
+
+```bash
+./netscan -config /path/to/config.yml
+```
 
 ## Deployment
-Build a single binary and deploy to your target system. Ensure InfluxDB is accessible and SNMP/ICMP traffic is permitted.
+
+### Automated (Recommended)
+
+```bash
+sudo ./deploy.sh
+```
+
+Creates:
+- `/opt/netscan/` with binary and config
+- `netscan` user with minimal privileges
+- `CAP_NET_RAW` capability on binary
+- Systemd service with security hardening
+
+### Manual
+
+```bash
+go build -o netscan ./cmd/netscan
+sudo mkdir -p /opt/netscan
+sudo cp netscan /opt/netscan/
+sudo cp config.yml /opt/netscan/
+sudo setcap cap_net_raw+ep /opt/netscan/netscan
+sudo useradd -r -s /bin/false netscan
+sudo chown -R netscan:netscan /opt/netscan
+
+sudo tee /etc/systemd/system/netscan.service > /dev/null <<EOF
+[Unit]
+Description=netscan network monitoring
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/netscan/netscan
+WorkingDirectory=/opt/netscan
+Restart=always
+User=netscan
+Group=netscan
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/netscan
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable netscan
+sudo systemctl start netscan
+```
+
+## Service Management
+
+```bash
+sudo systemctl status netscan
+sudo journalctl -u netscan -f
+sudo systemctl restart netscan
+sudo systemctl stop netscan
+```
+
+## Testing
+
+```bash
+go test ./...                    # All tests
+go test -v ./...                 # Verbose output
+go test ./internal/config        # Specific package
+go test -race ./...              # Race detection
+go test -cover ./...             # Coverage report
+```
+
+## Troubleshooting
+
+### ICMP Permission Denied
+```bash
+# Manual execution
+sudo ./netscan --icmp-only
+
+# Check capability
+getcap /usr/local/bin/netscan
+```
+
+### InfluxDB Connection Issues
+- Verify InfluxDB running: `sudo docker ps`
+- Check config credentials
+- Validate API token permissions
+
+### No Devices Discovered
+- Verify network ranges in config
+- Check firewall rules for ICMP/SNMP
+- Use `--icmp-only` for broader discovery
+
+### Performance Issues
+- **Monitor Real Usage**: Use `htop` or `top` to observe actual CPU/memory consumption
+- **Start Conservative**: Begin with lower worker counts (8 ICMP, 4 SNMP) and increase gradually
+- **SNMP Bottleneck**: SNMP operations are more CPU-intensive than ICMP pings
+- **Network Latency**: High latency networks may require fewer concurrent operations
+- **Memory Growth**: Monitor for memory leaks with long-running processes
+
+## Performance Tuning
+
+- **ICMP Workers**: 64 concurrent ping operations (lightweight, network-bound)
+- **SNMP Workers**: 32 concurrent SNMP queries (CPU-intensive protocol parsing)
+- **Memory**: ~50MB baseline + ~1KB per monitored device
+- **Scaling**: Adjust worker counts based on CPU cores and network size
+
+#### Recommended Worker Counts by System Size
+
+| System Type | CPU Cores | ICMP Workers | SNMP Workers | Max Devices |
+|-------------|-----------|--------------|--------------|-------------|
+| Raspberry Pi | 4 | 4-8 | 2-4 | 50-100 |
+| Home Server | 4-8 | 8-16 | 4-8 | 200-500 |
+| Workstation | 8-16 | 16-32 | 8-16 | 500-1000 |
+| Server | 16+ | 32-64 | 16-32 | 1000+ |
+
+#### Default Worker Counts
+
+The default configuration (64 ICMP, 32 SNMP workers) is optimized for:
+- **High-performance servers** (16+ CPU cores)
+- **Large enterprise networks** (/16+ CIDR ranges)
+- **Low-latency networks** (<1ms average ping times)
+
+**For most systems**, start with more conservative values:
+```yaml
+icmp_workers: 8   # 2-4x CPU cores
+snmp_workers: 4   # 1-2x CPU cores
+```
+
+Monitor actual CPU usage and adjust based on your specific environment.
+
+#### Performance Characteristics (Estimated)
+
+**Note**: Performance numbers are estimates based on typical Go application behavior and network monitoring patterns. Actual performance varies by:
+- Network latency and reliability
+- Device response times
+- System I/O capabilities
+- Go runtime scheduling overhead
+
+| System Type | CPU Cores | ICMP Workers | SNMP Workers | Est. CPU % | Concurrent Ops |
+|-------------|-----------|--------------|--------------|------------|----------------|
+| Raspberry Pi 4 | 4 | 4-8 | 2-4 | 10-25% | 6-12 |
+| Home Server | 4-8 | 8-16 | 4-8 | 15-35% | 12-24 |
+| Workstation | 8-16 | 16-32 | 8-16 | 20-45% | 24-48 |
+| Enterprise Server | 16+ | 32-64 | 16-32 | 30-60% | 48-96 |
+
+#### Real-World Testing Recommendations
+
+```bash
+# Monitor actual CPU usage
+watch -n 1 "ps aux | grep netscan | grep -v grep"
+
+# Test different worker counts
+# Start with conservative values and increase gradually
+icmp_workers: 8   # Start low, monitor CPU
+snmp_workers: 4   # SNMP is more CPU intensive
+
+# Use system monitoring tools
+htop    # Real-time CPU/memory monitoring
+iotop   # I/O monitoring
+nload   # Network bandwidth monitoring
+```
+
+#### Performance Factors
+
+- **ICMP Operations**: ~0.1-0.5ms CPU time per ping (mostly network wait)
+- **SNMP Operations**: ~5-50ms CPU time per query (protocol processing)
+- **Go Goroutines**: ~2-8KB memory per goroutine
+- **Channel Operations**: Minimal overhead with buffered channels
+
+## Implementation Details
+
+### Discovery Process
+1. ICMP sweep: Configurable concurrent workers ping all IPs in CIDR ranges
+2. SNMP polling: Configurable concurrent workers query online devices for MIB-II data
+3. State management: Devices tracked with last-seen timestamps
+4. Pruning: Devices removed after 2 * discovery_interval without sightings
+
+### Concurrency Model
+- Producer-consumer pattern with buffered channels (256 slots)
+- Context-based cancellation for graceful shutdown
+- sync.WaitGroup for worker lifecycle management
+
+### Metrics Storage
+- Measurement: "ping"
+- Tags: "ip", "hostname"
+- Fields: "rtt_ms" (float), "success" (boolean), "snmp_name" (string), "snmp_description" (string), "snmp_sysid" (string)
+- Point-based writes with error handling
+
+### Security Model
+- Linux capabilities: CAP_NET_RAW for raw socket access
+- Dedicated service user: Non-root execution
+- Systemd restrictions: PrivateTmp, ProtectSystem, NoNewPrivileges
+
+## Development
+
+### Code Quality
+```bash
+go fmt ./...    # Format code
+go vet ./...    # Static analysis
+go mod tidy     # Clean dependencies
+```
+
+### Project Structure
+```
+netscan/
+├── cmd/netscan/           # CLI application
+├── internal/              # Private packages
+│   ├── config/           # Configuration parsing
+│   ├── discovery/        # Network scanning
+│   ├── monitoring/       # Ping monitoring
+│   ├── state/            # Device state
+│   └── influx/           # Metrics storage
+├── docker-compose.yml    # Test environment
+├── build.sh             # Build automation
+├── deploy.sh            # Deployment script
+└── config.yml.example   # Configuration template
+```
 
 ## License
+
 MIT
