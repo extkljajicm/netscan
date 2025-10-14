@@ -180,12 +180,10 @@ Restart=always
 User=$SERVICE_USER
 Group=$SERVICE_USER
 
-# Security hardening
-NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
-ReadWritePaths=$INSTALL_DIR
-ProtectHome=yes
+# Security settings (relaxed for network access)
+NoNewPrivileges=no
+PrivateTmp=no
+ProtectSystem=no
 
 [Install]
 WantedBy=multi-user.target
