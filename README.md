@@ -85,30 +85,55 @@ cp config.yml.example config.yml
 ### Configuration Structure
 
 ```yaml
-# Discovery intervals
-discovery_interval: "4h"        # Full discovery cycle (ICMP + SNMP)
-icmp_discovery_interval: "5m"   # ICMP-only discovery cycle
+# config.yml.example - netscan network monitoring configuration
 
-# Worker counts for performance tuning
-icmp_workers: 64                # Concurrent ICMP ping workers
-snmp_workers: 32                # Concurrent SNMP polling workers
+# =============================================================================
+# DISCOVERY SETTINGS
+# =============================================================================
+# How often to run the full SNMP discovery scan (ICMP sweep + SNMP polling)
+discovery_interval: "4h"
 
-# Network ranges
+# How often to run ICMP discovery in --icmp-only mode
+icmp_discovery_interval: "5m"
+
+# Network ranges to scan (CIDR notation) - supports multiple subnets
 networks:
   - "192.168.0.0/24"
+  - "10.0.0.0/16"
+  - "172.16.0.0/12"
 
-# SNMP parameters
+# =============================================================================
+# PERFORMANCE TUNING
+# =============================================================================
+# Number of concurrent ICMP ping workers (recommended: 2-4x CPU cores)
+icmp_workers: 64
+
+# Number of concurrent SNMP polling workers (recommended: 1-2x CPU cores)
+snmp_workers: 32
+
+# =============================================================================
+# MONITORING SETTINGS
+# =============================================================================
+# Ping frequency per monitored device
+ping_interval: "2s"
+
+# Timeout for individual ping operations
+ping_timeout: "2s"
+
+# =============================================================================
+# SNMP SETTINGS
+# =============================================================================
+# SNMPv2c community string for device authentication
 snmp:
   community: "public"
   port: 161
   timeout: "5s"
   retries: 1
 
-# ICMP parameters
-ping_interval: "2s"             # Ping frequency per device
-ping_timeout: "2s"              # Individual ping timeout
-
-# InfluxDB connection
+# =============================================================================
+# INFLUXDB SETTINGS
+# =============================================================================
+# Time-series database for metrics storage
 influxdb:
   url: "http://localhost:8086"
   token: "netscan-token"
@@ -342,7 +367,95 @@ nload   # Network bandwidth monitoring
 
 ## Development
 
+### Development Setup
+
+#### Prerequisites
+- Go 1.21+ (tested with 1.25.1)
+- Git
+- InfluxDB 2.x (for testing)
+
+#### Clone Repository
+```bash
+git clone https://github.com/extkljajicm/netscan.git
+cd netscan
+go mod download
+```
+
+#### Test Environment Setup
+```bash
+# Start InfluxDB test instance
+sudo docker-compose up -d
+
+# Verify setup
+go build -o netscan ./cmd/netscan
+go test ./...
+```
+
+### Development Workflow
+
+#### Feature Development
+1. Create feature branch from main
+   ```bash
+   git checkout -b feature/new-monitoring-feature
+   ```
+
+2. Implement changes with conventional commits
+   ```bash
+   git add .
+   git commit -m "feat: add advanced ICMP timeout handling"
+   ```
+
+3. Push branch and create pull request
+   ```bash
+   git push origin feature/new-monitoring-feature
+   # Create pull request on GitHub
+   ```
+
+#### Conventional Commit Format
+```
+feat: add new monitoring feature
+fix: resolve memory leak in worker pools
+perf: optimize SNMP discovery concurrency
+docs: update configuration documentation
+test: add unit tests for config parsing
+refactor: restructure state management
+chore: update dependencies
+```
+
+#### Integration Testing
+- CI/CD pipeline triggers on push/PR
+- Runs tests with race detection
+- Builds binaries for validation
+- Reports code coverage
+- Validates configuration and deployment scripts
+
+#### Release Process
+1. Merge approved changes to main
+   ```bash
+   git checkout main
+   git pull origin main
+   ```
+
+2. Create version tag when ready for release
+   ```bash
+   git tag v1.0.0
+   git push origin main --tags
+   ```
+
+3. Automated release process:
+   - Changelog generation from conventional commits
+   - CHANGELOG.md update with new version section
+   - Multi-platform binary builds (Linux/macOS/Windows, AMD64/ARM64)
+   - Release archives creation (.tar.gz packages)
+   - GitHub release creation with attached binaries
+
+#### Version Strategy
+- Alpha/Beta: v0.x.x-alpha.x, v0.x.x-beta.x
+- Stable: v1.x.x, v2.x.x
+- Patch: v1.0.1, v1.0.2
+
 ### Code Quality
+
 ```bash
 go fmt ./...    # Format code
 go vet ./...    # Static analysis

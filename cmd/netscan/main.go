@@ -47,11 +47,17 @@ func main() {
 
 	if *icmpOnly {
 		log.Printf("--icmp-only flag set: Running ping-based discovery every %v, pinging online devices every %v...", cfg.IcmpDiscoveryInterval, cfg.PingInterval)
-		// Execute initial ICMP discovery scan at startup
+		// Execute initial ICMP discovery scan at startup across all networks
 		log.Println("Running initial ping discovery scan...")
-		devices := discovery.RunPingDiscovery(cfg.Networks[0], cfg.IcmpWorkers) // Assume single network
-		log.Printf("Initial ping discovery found %d online devices.", len(devices))
-		for _, dev := range devices {
+		var allDevices []state.Device
+		for _, network := range cfg.Networks {
+			log.Printf("Scanning network: %s", network)
+			devices := discovery.RunPingDiscovery(network, cfg.IcmpWorkers)
+			allDevices = append(allDevices, devices...)
+			log.Printf("Network %s found %d online devices.", network, len(devices))
+		}
+		log.Printf("Initial ping discovery found %d online devices across all networks.", len(allDevices))
+		for _, dev := range allDevices {
 			log.Printf("Online device: %s", dev.IP)
 			mgr.Add(dev)
 			mgr.UpdateLastSeen(dev.IP)
@@ -76,9 +82,14 @@ func main() {
 				return
 			case <-discoveryTicker.C:
 				log.Println("Running ping discovery scan...")
-				devices := discovery.RunPingDiscovery(cfg.Networks[0], cfg.IcmpWorkers) // Assume single network
-				log.Printf("Ping discovery found %d online devices.", len(devices))
-				for _, dev := range devices {
+				var allDevices []state.Device
+				for _, network := range cfg.Networks {
+					log.Printf("Scanning network: %s", network)
+					devices := discovery.RunPingDiscovery(network, cfg.IcmpWorkers)
+					allDevices = append(allDevices, devices...)
+				}
+				log.Printf("Ping discovery found %d online devices across all networks.", len(allDevices))
+				for _, dev := range allDevices {
 					log.Printf("Online device: %s", dev.IP)
 					mgr.Add(dev)
 					mgr.UpdateLastSeen(dev.IP)

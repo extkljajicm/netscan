@@ -31,6 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `ping` measurement: IP tag only, rtt/success fields (high-frequency)
   - `device_info` measurement: Device metadata stored once per discovery (low-frequency)
   - Eliminates redundant SNMP data storage on every ping measurement
+- **CI/CD Pipeline**: GitHub Actions workflow for automated testing, building, and releases
+  - Multi-platform binary builds (Linux/macOS/Windows, AMD64/ARM64)
+  - Automated changelog generation with git-cliff
+  - Release automation with version tagging
+  - Code coverage reporting
+- **Documentation**: Comprehensive README rewrite with technical specifications
+  - Complete development workflow documentation
+  - Performance tuning guidelines
+  - Troubleshooting and deployment guides
+  - Multi-network scanning support examples
 
 ### Dependencies
 - `github.com/gosnmp/gosnmp v1.42.1`

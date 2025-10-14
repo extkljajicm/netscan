@@ -1,25 +1,54 @@
-# Scan settings
-discovery_interval: "4h"  # How often to run the full SNMP discovery scan.
-icmp_discovery_interval: "5m"  # How often to run ICMP discovery in --icmp-only mode.
-icmp_workers: 64  # Number of concurrent ICMP ping workers
-snmp_workers: 32  # Number of concurrent SNMP polling workers
+# config.yml.example - netscan network monitoring configuration
+
+# =============================================================================
+# DISCOVERY SETTINGS
+# =============================================================================
+# How often to run the full SNMP discovery scan (ICMP sweep + SNMP polling)
+discovery_interval: "4h"
+
+# How often to run ICMP discovery in --icmp-only mode
+icmp_discovery_interval: "5m"
+
+# Network ranges to scan (CIDR notation) - supports multiple subnets
 networks:
   - "192.168.0.0/24"
+  - "10.0.0.0/16"
+  - "172.16.0.0/12"
 
-# SNMP settings (v2c)
+# =============================================================================
+# PERFORMANCE TUNING
+# =============================================================================
+# Number of concurrent ICMP ping workers (recommended: 2-4x CPU cores)
+icmp_workers: 64
+
+# Number of concurrent SNMP polling workers (recommended: 1-2x CPU cores)
+snmp_workers: 32
+
+# =============================================================================
+# MONITORING SETTINGS
+# =============================================================================
+# Ping frequency per monitored device
+ping_interval: "2s"
+
+# Timeout for individual ping operations
+ping_timeout: "2s"
+
+# =============================================================================
+# SNMP SETTINGS
+# =============================================================================
+# SNMPv2c community string for device authentication
 snmp:
   community: "public"
   port: 161
   timeout: "5s"
   retries: 1
 
-# ICMP Ping settings
-ping_interval: "2s"
-ping_timeout: "2s"
-
-# InfluxDB settings
+# =============================================================================
+# INFLUXDB SETTINGS
+# =============================================================================
+# Time-series database for metrics storage
 influxdb:
   url: "http://localhost:8086"
-  token: "netscan-token"  # Matches docker-compose.yml admin token
+  token: "netscan-token"
   org: "test-org"
   bucket: "netscan"
