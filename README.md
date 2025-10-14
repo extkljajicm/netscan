@@ -198,7 +198,7 @@ Creates:
 - `/opt/netscan/` with binary and config
 - `netscan` user with minimal privileges
 - `CAP_NET_RAW` capability on binary
-- Systemd service with security hardening
+- Systemd service with network-compatible security settings
 
 ### Manual
 
@@ -223,11 +223,12 @@ WorkingDirectory=/opt/netscan
 Restart=always
 User=netscan
 Group=netscan
+
+# Security settings (relaxed for network access)
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ReadWritePaths=/opt/netscan
-ProtectHome=yes
+AmbientCapabilities=CAP_NET_RAW
 
 [Install]
 WantedBy=multi-user.target
@@ -377,7 +378,7 @@ nload   # Network bandwidth monitoring
 ### Security Model
 - Linux capabilities: CAP_NET_RAW for raw socket access
 - Dedicated service user: Non-root execution
-- Systemd restrictions: PrivateTmp, ProtectSystem, NoNewPrivileges
+- Systemd hardening: NoNewPrivileges, PrivateTmp, ProtectSystem with AmbientCapabilities for network access
 
 ## Development
 

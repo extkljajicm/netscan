@@ -42,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Troubleshooting and deployment guides
   - Multi-network scanning support examples
 
+### Fixed
+- **Deployment Configuration**: deploy.sh now properly copies config.yml.example as config.yml template instead of using incorrect local config files
+- **Systemd Service Security**: Resolved ICMP blocking issue by implementing AmbientCapabilities=CAP_NET_RAW while maintaining NoNewPrivileges=yes for proper security hardening
+- **Service Permissions**: Corrected systemd security settings to enable network discovery operations without compromising system security
+
 ### Dependencies
 - `github.com/gosnmp/gosnmp v1.42.1`
 - `github.com/influxdata/influxdb-client-go/v2 v2.14.0`

@@ -180,10 +180,11 @@ Restart=always
 User=$SERVICE_USER
 Group=$SERVICE_USER
 
-# Security settings (relaxed for network access)
-NoNewPrivileges=no
-PrivateTmp=no
-ProtectSystem=no
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+AmbientCapabilities=CAP_NET_RAW
 
 [Install]
 WantedBy=multi-user.target
