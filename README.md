@@ -102,6 +102,13 @@ cp config.yml.example config.yml
 - **Secure .env File**: Deployment creates a separate `.env` file with restrictive permissions (600) for sensitive credentials
 - **Input Validation**: Configuration is validated at startup for security and sanity
 - **Network Range Validation**: Prevents scanning dangerous networks (loopback, multicast, link-local, overly broad ranges)
+- **Runtime Validation**: SNMP responses, IP addresses, and database writes are validated and sanitized
+- **SNMP Security**: Community string validation with weak password detection
+- **Resource Protection**: Configurable limits prevent DoS attacks and resource exhaustion
+  - Rate limiting for discovery scans and database writes
+  - Memory usage monitoring with configurable limits
+  - Concurrent operation bounds to prevent goroutine exhaustion
+  - Device count limits with automatic cleanup
 
 ### Environment Variables
 
@@ -109,9 +116,9 @@ Sensitive configuration values are loaded from a `.env` file created during depl
 
 ```bash
 # .env file (created by deploy.sh with 600 permissions)
-INFLUXDB_TOKEN=your-actual-influxdb-token
-INFLUXDB_ORG=your-actual-influxdb-org
-SNMP_COMMUNITY=your-actual-snmp-community
+INFLUXDB_TOKEN=netscan-token      # Default for testing (matches docker-compose.yml)
+INFLUXDB_ORG=test-org            # Default for testing (matches docker-compose.yml)
+SNMP_COMMUNITY=your-community    # Must be changed for security
 ```
 
 **Security Best Practices:**
@@ -119,6 +126,12 @@ SNMP_COMMUNITY=your-actual-snmp-community
 - Set restrictive permissions: `chmod 600 .env`
 - Rotate credentials regularly
 - Use strong, unique tokens for each environment
+
+**For Production:**
+- Generate unique, strong tokens for InfluxDB
+- Use different organizations per environment
+- Change SNMP community strings from defaults
+- Consider using a secret management system
 
 ### Configuration Structure
 
@@ -177,6 +190,15 @@ influxdb:
   token: "netscan-token"
   org: "test-org"
   bucket: "netscan"
+
+# =============================================================================
+# RESOURCE PROTECTION SETTINGS
+# =============================================================================
+# Limits to prevent resource exhaustion and DoS attacks
+max_concurrent_pingers: 1000  # Maximum number of concurrent ping goroutines
+max_devices: 10000            # Maximum number of devices to monitor
+min_scan_interval: "1m"       # Minimum interval between discovery scans
+memory_limit_mb: 512          # Memory usage limit in MB
 ```
 
 ### Docker Test Environment
