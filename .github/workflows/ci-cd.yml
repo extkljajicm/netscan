@@ -40,6 +40,8 @@ jobs:
         file: ./coverage.out
         flags: unittests
         name: codecov-umbrella
+      continue-on-error: true
+
 
   build:
     name: Build

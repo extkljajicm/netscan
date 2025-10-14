@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # netscan installation and deployment script
-set -e
+set -euo pipefail
 
 # Variables
 BINARY=netscan
@@ -9,37 +9,163 @@ INSTALL_DIR=/opt/netscan
 SERVICE_FILE=/etc/systemd/system/netscan.service
 SERVICE_USER=netscan
 
-# Build the binary
-if [ ! -f "$BINARY" ]; then
-    echo "Building netscan binary..."
-    go build -o $BINARY ./cmd/netscan
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Logging functions
+log_info() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+log_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+error_exit() {
+    log_error "$1"
+    exit 1
+}
+
+# Check if running as root or with sudo
+if [[ $EUID -ne 0 ]]; then
+    error_exit "This script must be run as root or with sudo privileges"
 fi
+
+# Check if Go is installed
+check_go() {
+    if ! command -v go &> /dev/null; then
+        error_exit "Go is not installed. Please install Go 1.21+ first."
+    fi
+
+    local go_version
+    go_version=$(go version | grep -oE 'go[0-9]+\.[0-9]+' | sed 's/go//')
+    local major_version
+    major_version=$(echo "$go_version" | cut -d. -f1)
+    local minor_version
+    minor_version=$(echo "$go_version" | cut -d. -f2)
+
+    if [[ $major_version -lt 1 ]] || [[ $major_version -eq 1 && $minor_version -lt 21 ]]; then
+        error_exit "Go version 1.21+ required. Found: $go_version"
+    fi
+
+    log_info "Go $go_version found ✓"
+}
+
+# Build the binary
+build_binary() {
+    if [[ -f "$BINARY" ]]; then
+        log_info "Binary $BINARY already exists, skipping build"
+        return 0
+    fi
+
+    log_info "Building netscan binary..."
+    if ! go build -o "$BINARY" ./cmd/netscan; then
+        error_exit "Failed to build netscan binary"
+    fi
+
+    if [[ ! -f "$BINARY" ]]; then
+        error_exit "Build completed but binary $BINARY not found"
+    fi
+
+    log_info "Binary built successfully ✓"
+}
 
 # Create dedicated service user
-if ! id "$SERVICE_USER" &>/dev/null; then
-    echo "Creating service user: $SERVICE_USER"
-    sudo useradd -r -s /bin/false $SERVICE_USER
-fi
+create_service_user() {
+    if id "$SERVICE_USER" &>/dev/null; then
+        log_info "Service user $SERVICE_USER already exists ✓"
+        return 0
+    fi
 
-# Create install directory
-sudo mkdir -p $INSTALL_DIR
-sudo cp $BINARY $INSTALL_DIR/
-if [ -f "$CONFIG" ]; then
-    sudo cp $CONFIG $INSTALL_DIR/
-else
-    echo "Warning: $CONFIG not found. Please copy your config file to $INSTALL_DIR manually."
-fi
+    log_info "Creating service user: $SERVICE_USER"
+    if ! useradd -r -s /bin/false "$SERVICE_USER" 2>/dev/null; then
+        log_error "Failed to create user $SERVICE_USER"
+        log_error "This might be due to insufficient permissions or user already exists"
+        log_error "Try running: sudo useradd -r -s /bin/false $SERVICE_USER"
+        exit 1
+    fi
+
+    log_info "Service user created successfully ✓"
+}
+
+# Create install directory and copy files
+install_files() {
+    log_info "Installing files to $INSTALL_DIR"
+
+    # Create install directory
+    if ! mkdir -p "$INSTALL_DIR"; then
+        error_exit "Failed to create directory $INSTALL_DIR"
+    fi
+
+    # Copy binary
+    if [[ ! -f "$BINARY" ]]; then
+        error_exit "Binary $BINARY not found. Please build it first."
+    fi
+
+    if ! cp "$BINARY" "$INSTALL_DIR/"; then
+        error_exit "Failed to copy binary to $INSTALL_DIR"
+    fi
+
+    # Copy config if it exists
+    if [[ -f "$CONFIG" ]]; then
+        if ! cp "$CONFIG" "$INSTALL_DIR/"; then
+            log_warn "Failed to copy config file, but continuing..."
+        fi
+    else
+        log_warn "$CONFIG not found. Please copy your config file to $INSTALL_DIR manually."
+    fi
+
+    log_info "Files installed successfully ✓"
+}
 
 # Set ownership and permissions
-sudo chown -R $SERVICE_USER:$SERVICE_USER $INSTALL_DIR
-sudo chmod 755 $INSTALL_DIR/$BINARY
+set_permissions() {
+    log_info "Setting ownership and permissions"
 
-# Set capabilities for ICMP access (raw sockets)
-echo "Setting CAP_NET_RAW capability for ICMP access..."
-sudo setcap cap_net_raw+ep $INSTALL_DIR/$BINARY
+    if ! chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"; then
+        error_exit "Failed to set ownership on $INSTALL_DIR"
+    fi
+
+    if ! chmod 755 "$INSTALL_DIR/$BINARY"; then
+        error_exit "Failed to set permissions on binary"
+    fi
+
+    log_info "Permissions set successfully ✓"
+}
+
+# Set capabilities for ICMP access
+set_capabilities() {
+    log_info "Setting CAP_NET_RAW capability for ICMP access"
+
+    if ! command -v setcap &> /dev/null; then
+        error_exit "setcap command not found. Please install libcap2-bin package."
+    fi
+
+    if ! setcap cap_net_raw+ep "$INSTALL_DIR/$BINARY"; then
+        error_exit "Failed to set capabilities on binary. This might require root privileges."
+    fi
+
+    # Verify capability was set
+    if ! getcap "$INSTALL_DIR/$BINARY" | grep -q "cap_net_raw+ep"; then
+        log_warn "Capability verification failed, but continuing..."
+    else
+        log_info "Capabilities set successfully ✓"
+    fi
+}
 
 # Create systemd service
-cat <<EOF | sudo tee $SERVICE_FILE
+create_service() {
+    log_info "Creating systemd service"
+
+    local service_content
+    service_content=$(cat <<EOF
 [Unit]
 Description=netscan network monitoring service
 After=network.target
@@ -62,10 +188,59 @@ ProtectHome=yes
 [Install]
 WantedBy=multi-user.target
 EOF
+)
 
-# Reload systemd and enable service
-sudo systemctl daemon-reload
-sudo systemctl enable netscan
-sudo systemctl start netscan
+    echo "$service_content" | tee "$SERVICE_FILE" > /dev/null
+    if [[ $? -ne 0 ]]; then
+        error_exit "Failed to create systemd service file"
+    fi
 
-echo "netscan deployed and running as a systemd service with dedicated user and capabilities."
+    log_info "Systemd service created ✓"
+}
+
+# Enable and start service
+enable_service() {
+    log_info "Enabling and starting systemd service"
+
+    if ! systemctl daemon-reload; then
+        error_exit "Failed to reload systemd daemon"
+    fi
+
+    if ! systemctl enable netscan; then
+        error_exit "Failed to enable netscan service"
+    fi
+
+    if ! systemctl start netscan; then
+        error_exit "Failed to start netscan service"
+    fi
+
+    # Verify service is running
+    sleep 2
+    if ! systemctl is-active --quiet netscan; then
+        log_error "Service failed to start. Check logs with: journalctl -u netscan -f"
+        exit 1
+    fi
+
+    log_info "Service enabled and started successfully ✓"
+}
+
+# Main execution
+main() {
+    log_info "Starting netscan deployment..."
+
+    check_go
+    build_binary
+    create_service_user
+    install_files
+    set_permissions
+    set_capabilities
+    create_service
+    enable_service
+
+    log_info "netscan deployed and running as a systemd service with dedicated user and capabilities."
+    log_info "Monitor with: sudo systemctl status netscan"
+    log_info "View logs with: sudo journalctl -u netscan -f"
+}
+
+# Run main function
+main "$@"
