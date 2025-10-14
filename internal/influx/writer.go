@@ -43,8 +43,8 @@ func (w *Writer) WriteDeviceInfo(ip, hostname, sysName, sysDescr, sysObjectID st
 // WritePingResult writes ICMP ping metrics to InfluxDB (optimized for time-series)
 func (w *Writer) WritePingResult(ip string, rtt time.Duration, successful bool) error {
 	p := influxdb2.NewPointWithMeasurement("ping")
-	p.AddTag("ip", ip) // Only IP as tag for low cardinality
-	p.AddField("rtt_ms", float64(rtt.Milliseconds()))
+	p.AddTag("ip", ip)                                   // Only IP as tag for low cardinality
+	p.AddField("rtt_ms", float64(rtt.Nanoseconds())/1e6) // Convert to float milliseconds
 	p.AddField("success", successful)
 	p.SetTime(time.Now())
 	return w.writeAPI.WritePoint(context.Background(), p)
