@@ -26,6 +26,11 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
+	// Validate configuration for security and sanity
+	if err := config.ValidateConfig(cfg); err != nil {
+		log.Fatalf("invalid configuration: %v", err)
+	}
+
 	mgr := state.NewManager()
 	writer := influx.NewWriter(cfg.InfluxDB.URL, cfg.InfluxDB.Token, cfg.InfluxDB.Org, cfg.InfluxDB.Bucket)
 	defer writer.Close()

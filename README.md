@@ -13,8 +13,8 @@ Performs two-phase network discovery: ICMP ping sweeps followed by SNMP polling 
 - **Concurrent Processing**: Configurable worker pool patterns for scalable network operations
 - **State Management**: RWMutex-protected device state with timestamp-based pruning
 - **InfluxDB v2**: Time-series metrics storage with point-based writes
-- **Configuration**: YAML-based config with duration parsing
-- **Security**: Linux capabilities (CAP_NET_RAW) for non-root ICMP access
+- **Configuration**: YAML-based config with duration parsing and environment variable support
+- **Security**: Linux capabilities (CAP_NET_RAW) for non-root ICMP access, input validation, and secure credential handling
 - **Single Binary**: No runtime dependencies
 
 ## Architecture
@@ -95,6 +95,12 @@ Copy and edit configuration:
 ```bash
 cp config.yml.example config.yml
 ```
+
+### Security Features
+
+- **Environment Variables**: Sensitive values (tokens, passwords) can use environment variables with `${VAR_NAME}` syntax
+- **Input Validation**: Configuration is validated at startup for security and sanity
+- **Network Range Validation**: Prevents scanning dangerous networks (loopback, multicast, link-local, overly broad ranges)
 
 ### Configuration Structure
 

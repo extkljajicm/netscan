@@ -38,7 +38,7 @@ ping_timeout: "2s"
 # =============================================================================
 # SNMPv2c community string for device authentication
 snmp:
-  community: "public"
+  community: "${SNMP_COMMUNITY}"  # Recommended: use environment variable
   port: 161
   timeout: "5s"
   retries: 1
@@ -47,8 +47,9 @@ snmp:
 # INFLUXDB SETTINGS
 # =============================================================================
 # Time-series database for metrics storage
+# Sensitive values can use environment variables: ${VAR_NAME}
 influxdb:
   url: "http://localhost:8086"
-  token: "netscan-token"
-  org: "test-org"
+  token: "${INFLUXDB_TOKEN}"  # Recommended: use environment variable
+  org: "${INFLUXDB_ORG}"      # Recommended: use environment variable
   bucket: "netscan"

@@ -41,11 +41,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Performance tuning guidelines
   - Troubleshooting and deployment guides
   - Multi-network scanning support examples
+- **Environment Variable Support**: Sensitive configuration values (InfluxDB tokens, SNMP community strings) can now use environment variables with `${VAR_NAME}` syntax for secure credential management
+- **Configuration Validation**: Comprehensive input validation at startup including network range validation, bounds checking, and required field verification
+- **Security Hardening**: Prevents scanning dangerous network ranges (loopback, multicast, link-local, overly broad CIDR blocks)
 
 ### Fixed
 - **Deployment Configuration**: deploy.sh now properly copies config.yml.example as config.yml template instead of using incorrect local config files
 - **Systemd Service Security**: Resolved ICMP blocking issue by implementing AmbientCapabilities=CAP_NET_RAW while maintaining NoNewPrivileges=yes for proper security hardening
 - **Service Permissions**: Corrected systemd security settings to enable network discovery operations without compromising system security
+- **Configuration Security**: Resolved plaintext credential exposure by implementing environment variable support for sensitive values
+- **Input Validation**: Added comprehensive validation to prevent dangerous configurations and resource exhaustion attacks
 
 ### Dependencies
 - `github.com/gosnmp/gosnmp v1.42.1`
