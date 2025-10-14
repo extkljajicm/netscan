@@ -113,13 +113,15 @@ install_files() {
         error_exit "Failed to copy binary to $INSTALL_DIR"
     fi
 
-    # Copy config if it exists
-    if [[ -f "$CONFIG" ]]; then
-        if ! cp "$CONFIG" "$INSTALL_DIR/"; then
-            log_warn "Failed to copy config file, but continuing..."
+    # Copy config template as config.yml
+    if [[ -f "config.yml.example" ]]; then
+        if ! cp "config.yml.example" "$INSTALL_DIR/config.yml"; then
+            log_warn "Failed to copy config template, but continuing..."
+        else
+            log_info "Config template copied as config.yml"
         fi
     else
-        log_warn "$CONFIG not found. Please copy your config file to $INSTALL_DIR manually."
+        log_warn "config.yml.example not found. Please ensure config template exists."
     fi
 
     log_info "Files installed successfully ✓"
