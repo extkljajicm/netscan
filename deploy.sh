@@ -95,6 +95,38 @@ create_service_user() {
     log_info "Service user created successfully ✓"
 }
 
+# Create secure .env file with sensitive environment variables
+create_env_file() {
+    log_info "Creating secure .env file with environment variables"
+
+    local env_content
+    env_content=$(cat <<'EOF'
+# Secure environment variables for netscan
+# This file contains sensitive configuration values
+# DO NOT commit this file to version control
+
+# InfluxDB credentials
+INFLUXDB_TOKEN=your-influxdb-token-here
+INFLUXDB_ORG=your-influxdb-org-here
+
+# SNMP credentials
+SNMP_COMMUNITY=public
+
+# Instructions:
+# 1. Replace the placeholder values above with your actual credentials
+# 2. Ensure this file has restrictive permissions (600)
+# 3. The service will automatically load these variables
+EOF
+)
+
+    echo "$env_content" | tee "$INSTALL_DIR/.env" > /dev/null
+    if [[ $? -ne 0 ]]; then
+        error_exit "Failed to create .env file"
+    fi
+
+    log_info ".env file created with secure placeholders ✓"
+}
+
 # Create install directory and copy files
 install_files() {
     log_info "Installing files to $INSTALL_DIR"
@@ -113,7 +145,7 @@ install_files() {
         error_exit "Failed to copy binary to $INSTALL_DIR"
     fi
 
-    # Copy config template as config.yml
+    # Copy config template as config.yml (without sensitive values)
     if [[ -f "config.yml.example" ]]; then
         if ! cp "config.yml.example" "$INSTALL_DIR/config.yml"; then
             log_warn "Failed to copy config template, but continuing..."
@@ -123,6 +155,9 @@ install_files() {
     else
         log_warn "config.yml.example not found. Please ensure config template exists."
     fi
+
+    # Create .env file with secure environment variables
+    create_env_file
 
     log_info "Files installed successfully ✓"
 }
@@ -137,6 +172,14 @@ set_permissions() {
 
     if ! chmod 755 "$INSTALL_DIR/$BINARY"; then
         error_exit "Failed to set permissions on binary"
+    fi
+
+    # Set restrictive permissions on .env file
+    if [[ -f "$INSTALL_DIR/.env" ]]; then
+        if ! chmod 600 "$INSTALL_DIR/.env"; then
+            error_exit "Failed to set restrictive permissions on .env file"
+        fi
+        log_info ".env file permissions set to 600 ✓"
     fi
 
     log_info "Permissions set successfully ✓"
@@ -179,6 +222,9 @@ WorkingDirectory=$INSTALL_DIR
 Restart=always
 User=$SERVICE_USER
 Group=$SERVICE_USER
+
+# Load environment variables from .env file
+EnvironmentFile=$INSTALL_DIR/.env
 
 # Security hardening
 NoNewPrivileges=yes

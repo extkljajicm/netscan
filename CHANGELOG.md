@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Troubleshooting and deployment guides
   - Multi-network scanning support examples
 - **Environment Variable Support**: Sensitive configuration values (InfluxDB tokens, SNMP community strings) can now use environment variables with `${VAR_NAME}` syntax for secure credential management
+- **Secure .env File**: Deployment script now creates a separate `.env` file with restrictive permissions (600) for sensitive credentials, following 12-factor app principles
 - **Configuration Validation**: Comprehensive input validation at startup including network range validation, bounds checking, and required field verification
 - **Security Hardening**: Prevents scanning dangerous network ranges (loopback, multicast, link-local, overly broad CIDR blocks)
 

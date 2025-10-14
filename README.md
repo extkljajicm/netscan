@@ -99,8 +99,26 @@ cp config.yml.example config.yml
 ### Security Features
 
 - **Environment Variables**: Sensitive values (tokens, passwords) can use environment variables with `${VAR_NAME}` syntax
+- **Secure .env File**: Deployment creates a separate `.env` file with restrictive permissions (600) for sensitive credentials
 - **Input Validation**: Configuration is validated at startup for security and sanity
 - **Network Range Validation**: Prevents scanning dangerous networks (loopback, multicast, link-local, overly broad ranges)
+
+### Environment Variables
+
+Sensitive configuration values are loaded from a `.env` file created during deployment:
+
+```bash
+# .env file (created by deploy.sh with 600 permissions)
+INFLUXDB_TOKEN=your-actual-influxdb-token
+INFLUXDB_ORG=your-actual-influxdb-org
+SNMP_COMMUNITY=your-actual-snmp-community
+```
+
+**Security Best Practices:**
+- Never commit `.env` files to version control
+- Set restrictive permissions: `chmod 600 .env`
+- Rotate credentials regularly
+- Use strong, unique tokens for each environment
 
 ### Configuration Structure
 
@@ -201,10 +219,11 @@ sudo ./deploy.sh
 ```
 
 Creates:
-- `/opt/netscan/` with binary and config
+- `/opt/netscan/` with binary, config, and secure `.env` file
 - `netscan` user with minimal privileges
 - `CAP_NET_RAW` capability on binary
 - Systemd service with network-compatible security settings
+- Secure credential management via environment variables
 
 ### Manual
 

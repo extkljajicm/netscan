@@ -1,4 +1,15 @@
 # config.yml.example - netscan network monitoring configuration
+#
+# SECURITY NOTE: Sensitive credentials are loaded from a separate .env file
+# for enhanced security. The .env file is created during deployment with
+# restrictive permissions (600) and should contain your actual credentials.
+#
+# Required environment variables in .env file:
+# - INFLUXDB_TOKEN=your-actual-influxdb-token
+# - INFLUXDB_ORG=your-actual-influxdb-org
+# - SNMP_COMMUNITY=your-actual-snmp-community
+#
+# DO NOT store actual credentials in this config.yml file!
 
 # =============================================================================
 # DISCOVERY SETTINGS
@@ -37,8 +48,9 @@ ping_timeout: "2s"
 # SNMP SETTINGS
 # =============================================================================
 # SNMPv2c community string for device authentication
+# Sensitive values are loaded from .env file (see Environment Variables section)
 snmp:
-  community: "${SNMP_COMMUNITY}"  # Recommended: use environment variable
+  community: "${SNMP_COMMUNITY}"  # Loaded from .env file
   port: 161
   timeout: "5s"
   retries: 1
@@ -47,9 +59,9 @@ snmp:
 # INFLUXDB SETTINGS
 # =============================================================================
 # Time-series database for metrics storage
-# Sensitive values can use environment variables: ${VAR_NAME}
+# Sensitive values are loaded from .env file (see Environment Variables section)
 influxdb:
   url: "http://localhost:8086"
-  token: "${INFLUXDB_TOKEN}"  # Recommended: use environment variable
-  org: "${INFLUXDB_ORG}"      # Recommended: use environment variable
+  token: "${INFLUXDB_TOKEN}"  # Loaded from .env file
+  org: "${INFLUXDB_ORG}"      # Loaded from .env file
   bucket: "netscan"
