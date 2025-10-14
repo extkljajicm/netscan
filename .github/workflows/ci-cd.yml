@@ -79,56 +79,9 @@ jobs:
         path: netscan
         retention-days: 30
 
-  build-multiplatform:
-    name: Build Multi-Platform
-    needs: test
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - os: linux
-            arch: amd64
-          - os: linux
-            arch: arm64
-          - os: darwin
-            arch: amd64
-          - os: darwin
-            arch: arm64
-          - os: windows
-            arch: amd64
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.21'
-
-    - name: Download dependencies
-      run: go mod download
-
-    - name: Build for ${{ matrix.os }}-${{ matrix.arch }}
-      env:
-        GOOS: ${{ matrix.os }}
-        GOARCH: ${{ matrix.arch }}
-      run: |
-        EXT=""
-        if [ "${{ matrix.os }}" = "windows" ]; then
-          EXT=".exe"
-        fi
-        go build -ldflags "-X main.version=${GITHUB_SHA::8}" -o netscan-${{ matrix.os }}-${{ matrix.arch }}${EXT} ./cmd/netscan
-
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: netscan-${{ matrix.os }}-${{ matrix.arch }}
-        path: netscan-${{ matrix.os }}-${{ matrix.arch }}*
-        retention-days: 30
-
   release:
     name: Create Release
-    needs: [test, build-multiplatform]
+    needs: [test, build]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -202,21 +155,16 @@ jobs:
           git push
         fi
 
-    - name: Download all build artifacts
+    - name: Download build artifact
       uses: actions/download-artifact@v4
       with:
-        path: artifacts
+        name: netscan-linux-amd64
+        path: artifacts/
 
-    - name: Create release archives
+    - name: Create release archive
       run: |
         cd artifacts
-        for dir in */; do
-          if [ -d "$dir" ]; then
-            cd "$dir"
-            tar -czf "../../${dir%/}.tar.gz" *
-            cd ..
-          fi
-        done
+        tar -czf ../netscan-linux-amd64.tar.gz *
         cd ..
         ls -la *.tar.gz
 
@@ -224,7 +172,7 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          artifacts/*.tar.gz
+          netscan-linux-amd64.tar.gz
         generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
