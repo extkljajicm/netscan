@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -27,11 +28,15 @@ func main() {
 	}
 
 	// Validate configuration for security and sanity
-	if err := config.ValidateConfig(cfg); err != nil {
+	warning, err := config.ValidateConfig(cfg)
+	if err != nil {
 		log.Fatalf("invalid configuration: %v", err)
 	}
+	if warning != "" {
+		log.Printf("Configuration warning: %s", warning)
+	}
 
-	mgr := state.NewManager()
+	mgr := state.NewManager(cfg.MaxDevices)
 	writer := influx.NewWriter(cfg.InfluxDB.URL, cfg.InfluxDB.Token, cfg.InfluxDB.Org, cfg.InfluxDB.Bucket)
 	defer writer.Close()
 
@@ -43,6 +48,30 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
+
+	// Helper function to start a pinger with resource limits
+	startPinger := func(dev state.Device) {
+		if len(activePingers) >= cfg.MaxConcurrentPingers {
+			log.Printf("Maximum concurrent pingers (%d) reached, skipping %s", cfg.MaxConcurrentPingers, dev.IP)
+			return
+		}
+		if _, running := activePingers[dev.IP]; !running {
+			log.Printf("Starting pinger for %s", dev.IP)
+			pingerCtx, cancel := context.WithCancel(ctx)
+			activePingers[dev.IP] = cancel
+			go monitoring.StartPinger(dev, cfg, writer, pingerCtx)
+		}
+	}
+
+	// Memory monitoring function
+	checkMemoryUsage := func() {
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		memoryMB := m.Alloc / 1024 / 1024
+		if memoryMB > uint64(cfg.MemoryLimitMB) {
+			log.Printf("WARNING: Memory usage (%d MB) exceeds limit (%d MB)", memoryMB, cfg.MemoryLimitMB)
+		}
+	}
 
 	go func() {
 		<-sigChan
@@ -66,17 +95,14 @@ func main() {
 			log.Printf("Online device: %s", dev.IP)
 			mgr.Add(dev)
 			mgr.UpdateLastSeen(dev.IP)
-			if _, running := activePingers[dev.IP]; !running {
-				log.Printf("Starting pinger for %s", dev.IP)
-				pingerCtx, cancel := context.WithCancel(ctx)
-				activePingers[dev.IP] = cancel
-				go monitoring.StartPinger(dev, cfg, writer, pingerCtx)
-			}
+			startPinger(dev)
 		}
 
 		// Schedule periodic ICMP discovery using configured interval
 		discoveryTicker := time.NewTicker(cfg.IcmpDiscoveryInterval)
 		defer discoveryTicker.Stop()
+		lastScanTime := time.Now().Add(-cfg.MinScanInterval) // Allow immediate first scan
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -86,6 +112,16 @@ func main() {
 				}
 				return
 			case <-discoveryTicker.C:
+				// Rate limiting check
+				if time.Since(lastScanTime) < cfg.MinScanInterval {
+					log.Printf("ICMP discovery scan rate limited (min interval: %v), skipping", cfg.MinScanInterval)
+					continue
+				}
+				lastScanTime = time.Now()
+
+				// Memory usage check
+				checkMemoryUsage()
+
 				log.Println("Running ping discovery scan...")
 				var allDevices []state.Device
 				for _, network := range cfg.Networks {
@@ -98,12 +134,7 @@ func main() {
 					log.Printf("Online device: %s", dev.IP)
 					mgr.Add(dev)
 					mgr.UpdateLastSeen(dev.IP)
-					if _, running := activePingers[dev.IP]; !running {
-						log.Printf("Starting pinger for %s", dev.IP)
-						pingerCtx, cancel := context.WithCancel(ctx)
-						activePingers[dev.IP] = cancel
-						go monitoring.StartPinger(dev, cfg, writer, pingerCtx)
-					}
+					startPinger(dev)
 				}
 				// Remove devices not seen in last 2 discovery cycles
 				pruned := mgr.Prune(2 * cfg.IcmpDiscoveryInterval)
@@ -131,10 +162,7 @@ func main() {
 			log.Printf("Failed to write device info for %s: %v", dev.IP, err)
 		}
 		if _, running := activePingers[dev.IP]; !running {
-			log.Printf("Starting pinger for %s (%s)", dev.IP, dev.Hostname)
-			pingerCtx, cancel := context.WithCancel(ctx)
-			activePingers[dev.IP] = cancel
-			go monitoring.StartPinger(dev, cfg, writer, pingerCtx)
+			startPinger(dev)
 		}
 	}
 
@@ -143,6 +171,8 @@ func main() {
 	defer discoveryTicker.Stop()
 
 	log.Printf("Starting discovery loop (interval: %v)...", cfg.DiscoveryInterval)
+	lastScanTime := time.Now().Add(-cfg.MinScanInterval) // Allow immediate first scan
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -152,6 +182,16 @@ func main() {
 			}
 			return
 		case <-discoveryTicker.C:
+			// Rate limiting check
+			if time.Since(lastScanTime) < cfg.MinScanInterval {
+				log.Printf("Discovery scan rate limited (min interval: %v), skipping", cfg.MinScanInterval)
+				continue
+			}
+			lastScanTime = time.Now()
+
+			// Memory usage check
+			checkMemoryUsage()
+
 			log.Println("Running full discovery scan...")
 			devices := discovery.RunFullDiscovery(cfg)
 			log.Printf("Discovery found %d devices.", len(devices))
@@ -164,10 +204,7 @@ func main() {
 					log.Printf("Failed to write device info for %s: %v", dev.IP, err)
 				}
 				if _, running := activePingers[dev.IP]; !running {
-					log.Printf("Starting pinger for %s (%s)", dev.IP, dev.Hostname)
-					pingerCtx, cancel := context.WithCancel(ctx)
-					activePingers[dev.IP] = cancel
-					go monitoring.StartPinger(dev, cfg, writer, pingerCtx)
+					startPinger(dev)
 				}
 			}
 			// Remove devices not seen in last 2 discovery cycles (interval * 2)

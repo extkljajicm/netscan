@@ -16,24 +16,54 @@ type Device struct {
 
 // Manager provides thread-safe device state management
 type Manager struct {
-	devices map[string]*Device // Map IP addresses to device pointers
-	mu      sync.RWMutex       // Protects concurrent access to devices map
+	devices    map[string]*Device // Map IP addresses to device pointers
+	mu         sync.RWMutex       // Protects concurrent access to devices map
+	maxDevices int                // Maximum number of devices to manage
 }
 
 // NewManager creates a new device state manager
-func NewManager() *Manager {
+func NewManager(maxDevices int) *Manager {
+	if maxDevices <= 0 {
+		maxDevices = 10000 // Default if not specified
+	}
 	return &Manager{
-		devices: make(map[string]*Device),
+		devices:    make(map[string]*Device),
+		maxDevices: maxDevices,
 	}
 }
 
 // Add inserts a new device if it doesn't already exist (idempotent operation)
+// Enforces device count limits by removing oldest devices when limit is reached
 func (m *Manager) Add(device Device) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, exists := m.devices[device.IP]; !exists {
-		m.devices[device.IP] = &device
+
+	// If device already exists, just update it
+	if existing, exists := m.devices[device.IP]; exists {
+		*existing = device
+		return
 	}
+
+	// Check if we've reached the device limit
+	if len(m.devices) >= m.maxDevices {
+		// Remove the oldest device (smallest LastSeen time)
+		var oldestIP string
+		var oldestTime time.Time
+		first := true
+		for ip, dev := range m.devices {
+			if first || dev.LastSeen.Before(oldestTime) {
+				oldestIP = ip
+				oldestTime = dev.LastSeen
+				first = false
+			}
+		}
+		if oldestIP != "" {
+			delete(m.devices, oldestIP)
+		}
+	}
+
+	// Add the new device
+	m.devices[device.IP] = &device
 }
 
 // Get retrieves a device by IP address, returns nil if not found

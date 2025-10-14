@@ -60,11 +60,6 @@ check_go() {
 
 # Build the binary
 build_binary() {
-    if [[ -f "$BINARY" ]]; then
-        log_info "Binary $BINARY already exists, skipping build"
-        return 0
-    fi
-
     log_info "Building netscan binary..."
     if ! go build -o "$BINARY" ./cmd/netscan; then
         error_exit "Failed to build netscan binary"
@@ -105,17 +100,18 @@ create_env_file() {
 # This file contains sensitive configuration values
 # DO NOT commit this file to version control
 
-# InfluxDB credentials
-INFLUXDB_TOKEN=your-influxdb-token-here
-INFLUXDB_ORG=your-influxdb-org-here
+# InfluxDB credentials (defaults from docker-compose.yml for testing)
+INFLUXDB_TOKEN=netscan-token
+INFLUXDB_ORG=test-org
 
 # SNMP credentials
 SNMP_COMMUNITY=public
 
 # Instructions:
-# 1. Replace the placeholder values above with your actual credentials
-# 2. Ensure this file has restrictive permissions (600)
-# 3. The service will automatically load these variables
+# 1. For testing: Use the default values above (matches docker-compose.yml)
+# 2. For production: Replace with your actual secure credentials
+# 3. Ensure this file has restrictive permissions (600)
+# 4. The service will automatically load these variables
 EOF
 )
 

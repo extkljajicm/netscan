@@ -1,8 +1,10 @@
 package discovery
 
 import (
+	"fmt"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,11 +50,26 @@ func RunScan(cfg *config.Config) []state.Device {
 			if err != nil || len(resp.Variables) < 3 {
 				continue // Skip devices with incomplete SNMP responses
 			}
+
+			// Validate and sanitize SNMP response data
+			hostname, err := validateSNMPString(resp.Variables[0].Value, "sysName")
+			if err != nil {
+				continue // Skip devices with invalid hostname data
+			}
+			sysDescr, err := validateSNMPString(resp.Variables[1].Value, "sysDescr")
+			if err != nil {
+				continue // Skip devices with invalid description data
+			}
+			sysObjectID, err := validateSNMPString(resp.Variables[2].Value, "sysObjectID")
+			if err != nil {
+				continue // Skip devices with invalid OID data
+			}
+
 			dev := state.Device{
 				IP:          ip,
-				Hostname:    resp.Variables[0].Value.(string),
-				SysDescr:    resp.Variables[1].Value.(string),
-				SysObjectID: resp.Variables[2].Value.(string),
+				Hostname:    hostname,
+				SysDescr:    sysDescr,
+				SysObjectID: sysObjectID,
 				LastSeen:    time.Now(),
 			}
 			results <- dev
@@ -197,11 +214,26 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 				}
 				continue
 			}
+
+			// Validate and sanitize SNMP response data
+			hostname, err := validateSNMPString(resp.Variables[0].Value, "sysName")
+			if err != nil {
+				continue // Skip devices with invalid hostname data
+			}
+			sysDescr, err := validateSNMPString(resp.Variables[1].Value, "sysDescr")
+			if err != nil {
+				continue // Skip devices with invalid description data
+			}
+			sysObjectID, err := validateSNMPString(resp.Variables[2].Value, "sysObjectID")
+			if err != nil {
+				continue // Skip devices with invalid OID data
+			}
+
 			dev := state.Device{
 				IP:          ip,
-				Hostname:    string(resp.Variables[0].Value.([]byte)),
-				SysDescr:    string(resp.Variables[1].Value.([]byte)),
-				SysObjectID: resp.Variables[2].Value.(string),
+				Hostname:    hostname,
+				SysDescr:    sysDescr,
+				SysObjectID: sysObjectID,
 				LastSeen:    time.Now(),
 			}
 			results <- dev
@@ -316,4 +348,44 @@ func incIP(ip net.IP) {
 			break
 		}
 	}
+}
+
+// validateSNMPString validates and sanitizes SNMP response string values
+func validateSNMPString(value interface{}, oidName string) (string, error) {
+	str, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("invalid type for %s: expected string, got %T", oidName, value)
+	}
+
+	// Check for null bytes and other control characters that could be dangerous
+	if strings.ContainsRune(str, '\x00') {
+		return "", fmt.Errorf("invalid %s: contains null bytes", oidName)
+	}
+
+	// Limit string length to prevent memory exhaustion
+	if len(str) > 1024 {
+		str = str[:1024] // Truncate to reasonable length
+	}
+
+	// Basic sanitization - remove or replace potentially dangerous characters
+	// Allow printable ASCII and some common extended characters
+	sanitized := strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' {
+			return ' ' // Replace newlines/tabs with spaces
+		}
+		if r < 32 || r > 126 { // Non-printable ASCII
+			return -1 // Remove character
+		}
+		return r
+	}, str)
+
+	// Trim whitespace
+	sanitized = strings.TrimSpace(sanitized)
+
+	// Ensure we have a valid string after sanitization
+	if len(sanitized) == 0 {
+		return "", fmt.Errorf("invalid %s: empty after sanitization", oidName)
+	}
+
+	return sanitized, nil
 }

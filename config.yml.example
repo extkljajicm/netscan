@@ -2,12 +2,14 @@
 #
 # SECURITY NOTE: Sensitive credentials are loaded from a separate .env file
 # for enhanced security. The .env file is created during deployment with
-# restrictive permissions (600) and should contain your actual credentials.
+# restrictive permissions (600) and contains default test values that match
+# docker-compose.yml. For production use, update the .env file with secure
+# credentials.
 #
 # Required environment variables in .env file:
-# - INFLUXDB_TOKEN=your-actual-influxdb-token
-# - INFLUXDB_ORG=your-actual-influxdb-org
-# - SNMP_COMMUNITY=your-actual-snmp-community
+# - INFLUXDB_TOKEN=netscan-token (default for testing)
+# - INFLUXDB_ORG=test-org (default for testing)
+# - SNMP_COMMUNITY=public (default for testing - change for production security)
 #
 # DO NOT store actual credentials in this config.yml file!
 
@@ -50,7 +52,7 @@ ping_timeout: "2s"
 # SNMPv2c community string for device authentication
 # Sensitive values are loaded from .env file (see Environment Variables section)
 snmp:
-  community: "${SNMP_COMMUNITY}"  # Loaded from .env file
+  community: "${SNMP_COMMUNITY}"  # Loaded from .env file - default is 'public' for testing
   port: 161
   timeout: "5s"
   retries: 1
@@ -65,3 +67,12 @@ influxdb:
   token: "${INFLUXDB_TOKEN}"  # Loaded from .env file
   org: "${INFLUXDB_ORG}"      # Loaded from .env file
   bucket: "netscan"
+
+# =============================================================================
+# RESOURCE PROTECTION SETTINGS
+# =============================================================================
+# Limits to prevent resource exhaustion and DoS attacks
+max_concurrent_pingers: 1000  # Maximum number of concurrent ping goroutines
+max_devices: 10000            # Maximum number of devices to monitor
+min_scan_interval: "1m"       # Minimum interval between discovery scans
+memory_limit_mb: 512          # Memory usage limit in MB

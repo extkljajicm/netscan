@@ -6,7 +6,7 @@ import (
 )
 
 func TestManagerAddGetPrune(t *testing.T) {
-	mgr := NewManager()
+	mgr := NewManager(1000) // Test with max 1000 devices
 	dev := Device{IP: "1.2.3.4", Hostname: "host", SysDescr: "desc", SysObjectID: "obj", LastSeen: time.Now()}
 	mgr.Add(dev)
 	got, ok := mgr.Get("1.2.3.4")
