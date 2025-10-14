@@ -74,6 +74,20 @@ go build -o netscan ./cmd/netscan
 ./build.sh
 ```
 
+## Testing Deployment
+
+The repository includes both deployment and undeployment scripts for safe testing:
+
+```bash
+# Deploy netscan as a systemd service
+sudo ./deploy.sh
+
+# Completely uninstall and clean up (for testing)
+sudo ./undeploy.sh
+```
+
+The undeployment script provides a 100% clean removal of all components installed by `deploy.sh`.
+
 ## Configuration
 
 Copy and edit configuration:
