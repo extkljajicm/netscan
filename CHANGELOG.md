@@ -5,7 +5,37 @@ All notable changes to netscan will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - 2025-10-14
+## [Unreleased] - 2025-10-18
+
+### Changed
+- **Architecture Refactoring**: Migrated from single-loop discovery to multi-ticker architecture
+  - Four independent tickers: ICMP Discovery, Daily SNMP Scan, Pinger Reconciliation, State Pruning
+  - Decoupled operations for better efficiency and reliability
+  - State-centric design with StateManager as single source of truth
+  - See `REFACTORING_SUMMARY.md` and `MIGRATION_GUIDE.md` for details
+- **SNMP Scanning**: Dual-trigger approach for efficient device enrichment
+  - Immediate SNMP scan when new device discovered
+  - Scheduled daily SNMP scan for all known devices
+  - Reduced overhead compared to previous full scan every 4 hours
+- **Configuration**: Removed `--icmp-only` flag (no longer needed with new architecture)
+- **Configuration**: Added `-config` flag support for specifying config file path
+
+### Added
+- **New Configuration Field**: `snmp_daily_schedule` (HH:MM format) for scheduling daily SNMP scans
+- **New State Manager Methods**: `AddDevice()`, `UpdateDeviceSNMP()`, `GetAllIPs()`, `PruneStale()`
+- **New Scanner Functions**: `RunICMPSweep()` and `RunSNMPScan()` for composable discovery operations
+- **Documentation**: Added `REFACTORING_SUMMARY.md` with technical details of all changes
+- **Documentation**: Added `MIGRATION_GUIDE.md` with step-by-step deployment instructions
+
+### Security
+- **No Regressions**: All security improvements from previous releases fully retained
+  - Mutex protection for concurrent map access
+  - InfluxDB health checks at startup
+  - Context timeouts on all external operations
+  - CIDR expansion limits and input validation
+  - Rate limiting and resource bounds
+
+## [Previous] - 2025-10-14
 
 ### Added
 - **Concurrent Scanning**: 64-worker goroutine pools for high-performance network discovery

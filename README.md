@@ -4,14 +4,18 @@ Network monitoring service written in Go that performs ICMP ping monitoring of d
 
 ## Overview
 
-Performs two-phase network discovery: ICMP ping sweeps followed by SNMP polling of online devices. Continuously monitors device availability and latency.
+Performs decoupled network discovery and monitoring with four independent tickers: ICMP discovery finds new devices, scheduled SNMP scans enrich device data, pinger reconciliation ensures continuous monitoring, and state pruning removes stale devices. This architecture provides efficient resource usage and fast response to network changes.
 
 ## Features
 
-- **Two-Phase Discovery**: ICMP sweep (configurable workers) then SNMP polling (configurable workers) on online devices
-- **Dual Modes**: Full discovery (ICMP + SNMP) or ICMP-only mode
+- **Multi-Ticker Architecture**: Four independent tickers for decoupled operations
+  - ICMP Discovery (every 5m) - Finds new responsive devices
+  - Daily SNMP Scan (scheduled) - Enriches all devices with SNMP data
+  - Pinger Reconciliation (every 5s) - Ensures all devices monitored
+  - State Pruning (every 1h) - Removes stale devices
+- **Dual-Trigger SNMP**: Immediate scan for new devices + scheduled daily scan for all devices
 - **Concurrent Processing**: Configurable worker pool patterns for scalable network operations
-- **State Management**: RWMutex-protected device state with timestamp-based pruning
+- **State-Centric Design**: StateManager as single source of truth for all devices
 - **InfluxDB v2**: Time-series metrics storage with point-based writes
 - **Configuration**: YAML-based config with duration parsing and environment variable support
 - **Security**: Linux capabilities (CAP_NET_RAW) for non-root ICMP access, input validation, and secure credential handling
@@ -19,14 +23,21 @@ Performs two-phase network discovery: ICMP ping sweeps followed by SNMP polling 
 
 ## Architecture
 
+The application uses a **multi-ticker architecture** with four independent, concurrent loops:
+
+1. **ICMP Discovery Ticker** - Scans networks for responsive devices
+2. **Daily SNMP Scan Ticker** - Enriches devices with SNMP data at scheduled time
+3. **Pinger Reconciliation Ticker** - Ensures all devices have active monitoring
+4. **State Pruning Ticker** - Removes devices not seen in 24 hours
+
 ```
-cmd/netscan/main.go           # Orchestration and CLI interface
+cmd/netscan/main.go           # Four-ticker orchestration and CLI interface
 internal/
-├── config/config.go          # YAML parsing with duration conversion
-├── discovery/scanner.go      # ICMP/SNMP discovery with worker pools
-├── monitoring/pinger.go      # ICMP monitoring goroutines
-├── state/manager.go          # Thread-safe device state (RWMutex)
-└── influx/writer.go          # InfluxDB client wrapper
+├── config/config.go          # YAML parsing with SNMPDailySchedule support
+├── discovery/scanner.go      # RunICMPSweep() and RunSNMPScan() functions
+├── monitoring/pinger.go      # ICMP monitoring with StateManager integration
+├── state/manager.go          # Thread-safe device state (single source of truth)
+└── influx/writer.go          # InfluxDB client wrapper with health checks
 ```
 
 ## Dependencies
@@ -190,6 +201,11 @@ snmp:
   timeout: "5s"
   retries: 1
 
+# Daily scheduled SNMP scan time (HH:MM format in 24-hour time)
+# Full SNMP scan of all known devices runs once per day at this time
+# Leave empty to disable scheduled SNMP scans (only immediate scans on device discovery)
+snmp_daily_schedule: "02:00"
+
 # =============================================================================
 # INFLUXDB SETTINGS
 # =============================================================================
@@ -219,21 +235,17 @@ memory_limit_mb: 512          # Memory usage limit in MB
 
 ## Usage
 
-### Full Discovery Mode (Default)
+### Standard Mode
 
 ```bash
 ./netscan
 ```
 
-Performs ICMP sweep across configured networks, then SNMP polling of online devices.
-
-### ICMP-Only Mode
-
-```bash
-./netscan --icmp-only
-```
-
-ICMP discovery only, configurable via `icmp_discovery_interval`.
+Runs the multi-ticker architecture with:
+- ICMP discovery every 5 minutes (configurable via `icmp_discovery_interval`)
+- Daily SNMP scan at configured time (e.g., 02:00)
+- Continuous monitoring of all discovered devices
+- Automatic state pruning of stale devices
 
 ### Custom Config
 
@@ -244,7 +256,9 @@ ICMP discovery only, configurable via `icmp_discovery_interval`.
 ### Command Line Options
 
 - `-config string`: Path to configuration file (default "config.yml")
-- `-icmp-only`: Skip SNMP discovery, run ICMP-only monitoring mode
+- `-help`: Display usage information
+
+**Note**: The `--icmp-only` flag has been removed in the new architecture. The multi-ticker system efficiently handles both ICMP discovery and SNMP scanning without needing separate modes.
 
 ## Deployment
 
@@ -460,11 +474,29 @@ snmp_workers: 4   # SNMP is more CPU intensive
 
 ## Implementation Details
 
-### Discovery Process
-1. ICMP sweep: Configurable concurrent workers ping all IPs in CIDR ranges
-2. SNMP polling: Configurable concurrent workers query online devices for MIB-II data
-3. State management: Devices tracked with last-seen timestamps
-4. Pruning: Devices removed after 2 * discovery_interval without sightings
+### Discovery Process (Multi-Ticker Architecture)
+
+The new architecture uses four independent tickers:
+
+1. **ICMP Discovery Ticker** (every `icmp_discovery_interval`, default 5m):
+   - Performs ICMP ping sweep across all configured networks
+   - Adds responsive IPs to StateManager
+   - Triggers immediate SNMP scan for newly discovered devices
+
+2. **Daily SNMP Scan Ticker** (at `snmp_daily_schedule`, e.g., 02:00):
+   - Full SNMP scan of all devices in StateManager
+   - Enriches devices with hostname, sysDescr, and sysObjectID
+   - Updates device info in InfluxDB
+
+3. **Pinger Reconciliation Ticker** (every 5 seconds):
+   - Ensures every device in StateManager has an active pinger goroutine
+   - Starts pingers for new devices
+   - Stops pingers for removed devices
+   - Maintains consistency between state and running pingers
+
+4. **State Pruning Ticker** (every 1 hour):
+   - Removes devices not seen in last 24 hours
+   - Prevents memory growth from stale devices
 
 ### Concurrency Model
 - Producer-consumer pattern with buffered channels (256 slots)

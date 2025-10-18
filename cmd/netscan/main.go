@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"os"
 	"os/signal"
@@ -18,8 +19,11 @@ import (
 )
 
 func main() {
+	configPath := flag.String("config", "config.yml", "Path to configuration file")
+	flag.Parse()
+
 	log.Println("netscan starting up...")
-	cfg, err := config.LoadConfig("config.yml")
+	cfg, err := config.LoadConfig(*configPath)
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
