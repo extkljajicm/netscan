@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sync"
 	"time"
 
-	"github.com/extkljajicm/netscan/internal/config"
 	"github.com/extkljajicm/netscan/internal/state"
 	probing "github.com/prometheus-community/pro-bing"
 )
@@ -18,10 +18,20 @@ type PingWriter interface {
 	WriteDeviceInfo(ip, hostname, sysName, sysDescr, sysObjectID string) error
 }
 
+// StateManager interface for updating device last seen timestamp
+type StateManager interface {
+	UpdateLastSeen(ip string)
+}
+
 // StartPinger runs continuous ICMP monitoring for a single device
-func StartPinger(device state.Device, cfg *config.Config, writer PingWriter, ctx context.Context) {
-	ticker := time.NewTicker(cfg.PingInterval)
+func StartPinger(ctx context.Context, wg *sync.WaitGroup, device state.Device, interval time.Duration, writer PingWriter, stateMgr StateManager) {
+	if wg != nil {
+		defer wg.Done()
+	}
+	
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	
 	for {
 		select {
 		case <-ctx.Done():
@@ -40,9 +50,9 @@ func StartPinger(device state.Device, cfg *config.Config, writer PingWriter, ctx
 				log.Printf("Ping error for %s: %v", device.IP, err)
 				continue // Skip invalid IP configurations
 			}
-			pinger.Count = 1                 // Single ICMP echo request per interval
-			pinger.Timeout = cfg.PingTimeout // Configured ping timeout
-			pinger.SetPrivileged(true)       // Use raw ICMP sockets (requires root)
+			pinger.Count = 1                              // Single ICMP echo request per interval
+			pinger.Timeout = 2 * time.Second              // 2-second ping timeout
+			pinger.SetPrivileged(true)                    // Use raw ICMP sockets (requires root)
 			if err := pinger.Run(); err != nil {
 				log.Printf("Ping run error for %s: %v", device.IP, err)
 				continue // Skip execution errors
@@ -50,6 +60,10 @@ func StartPinger(device state.Device, cfg *config.Config, writer PingWriter, ctx
 			stats := pinger.Statistics()
 			if stats.PacketsRecv > 0 {
 				log.Printf("Ping success: %s RTT=%v", device.IP, stats.AvgRtt)
+				// Update last seen timestamp in state manager
+				if stateMgr != nil {
+					stateMgr.UpdateLastSeen(device.IP)
+				}
 				if err := writer.WritePingResult(device.IP, stats.AvgRtt, true); err != nil {
 					log.Printf("Failed to write ping result for %s: %v", device.IP, err)
 				}

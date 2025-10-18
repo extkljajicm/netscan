@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/extkljajicm/netscan/internal/config"
 	"github.com/extkljajicm/netscan/internal/state"
 )
 
@@ -36,15 +35,25 @@ func (m *mockWriter) WriteDeviceInfo(ip, hostname, sysName, sysDescr, sysObjectI
 	return nil
 }
 
+type mockStateManager struct {
+	lastSeenCalled bool
+	lastSeenIP     string
+}
+
+func (m *mockStateManager) UpdateLastSeen(ip string) {
+	m.lastSeenCalled = true
+	m.lastSeenIP = ip
+}
+
 func TestStartPingerCancel(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("Test requires root privileges for ICMP ping")
 	}
 	dev := state.Device{IP: "127.0.0.1", Hostname: "localhost"}
-	cfg := &config.Config{PingInterval: 10 * time.Millisecond, PingTimeout: 1 * time.Millisecond}
 	writer := &mockWriter{}
+	stateMgr := &mockStateManager{}
 	ctx, cancel := context.WithCancel(context.Background())
-	go StartPinger(dev, cfg, writer, ctx)
+	go StartPinger(ctx, nil, dev, 10*time.Millisecond, writer, stateMgr)
 	time.Sleep(30 * time.Millisecond)
 	cancel()
 	if !writer.called {

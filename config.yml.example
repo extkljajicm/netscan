@@ -57,6 +57,11 @@ snmp:
   timeout: "5s"
   retries: 1
 
+# Daily scheduled SNMP scan time (HH:MM format in 24-hour time)
+# Full SNMP scan of all known devices runs once per day at this time
+# Leave empty to disable scheduled SNMP scans (only immediate scans on device discovery)
+snmp_daily_schedule: "02:00"
+
 # =============================================================================
 # INFLUXDB SETTINGS
 # =============================================================================

@@ -38,6 +38,7 @@ type Config struct {
 	PingInterval          time.Duration  `yaml:"ping_interval"`
 	PingTimeout           time.Duration  `yaml:"ping_timeout"`
 	InfluxDB              InfluxDBConfig `yaml:"influxdb"`
+	SNMPDailySchedule     string         `yaml:"snmp_daily_schedule"` // Daily SNMP scan time (HH:MM format)
 	// Resource protection settings
 	MaxConcurrentPingers int           `yaml:"max_concurrent_pingers"`
 	MaxDevices           int           `yaml:"max_devices"`
@@ -64,6 +65,7 @@ func LoadConfig(path string) (*Config, error) {
 		PingInterval          string         `yaml:"ping_interval"`
 		PingTimeout           string         `yaml:"ping_timeout"`
 		InfluxDB              InfluxDBConfig `yaml:"influxdb"`
+		SNMPDailySchedule     string         `yaml:"snmp_daily_schedule"`
 		// Resource protection settings
 		MaxConcurrentPingers int    `yaml:"max_concurrent_pingers"`
 		MaxDevices           int    `yaml:"max_devices"`
@@ -145,6 +147,7 @@ func LoadConfig(path string) (*Config, error) {
 		PingInterval:          pingInterval,
 		PingTimeout:           pingTimeout,
 		InfluxDB:              raw.InfluxDB,
+		SNMPDailySchedule:     raw.SNMPDailySchedule,
 		MaxConcurrentPingers:  raw.MaxConcurrentPingers,
 		MaxDevices:            raw.MaxDevices,
 		MinScanInterval:       minScanInterval,
@@ -184,6 +187,13 @@ func ValidateConfig(cfg *Config) (string, error) {
 	}
 	if cfg.PingInterval < time.Second {
 		return "", fmt.Errorf("ping_interval must be at least 1 second, got %v", cfg.PingInterval)
+	}
+
+	// Validate SNMP daily schedule format (HH:MM)
+	if cfg.SNMPDailySchedule != "" {
+		if err := validateTimeFormat(cfg.SNMPDailySchedule); err != nil {
+			return "", fmt.Errorf("snmp_daily_schedule validation failed: %v", err)
+		}
 	}
 
 	// Validate SNMP settings
@@ -346,6 +356,34 @@ func validateURL(urlStr string) error {
 		// For now, just continue - the user may be using docker-compose for testing
 	}
 
+	return nil
+}
+
+// validateTimeFormat validates time in HH:MM format (24-hour)
+func validateTimeFormat(timeStr string) error {
+	if len(timeStr) != 5 {
+		return fmt.Errorf("time must be in HH:MM format, got %s", timeStr)
+	}
+	
+	parts := strings.Split(timeStr, ":")
+	if len(parts) != 2 {
+		return fmt.Errorf("time must be in HH:MM format, got %s", timeStr)
+	}
+	
+	// Parse hours
+	var hour, minute int
+	_, err := fmt.Sscanf(timeStr, "%02d:%02d", &hour, &minute)
+	if err != nil {
+		return fmt.Errorf("invalid time format %s: %v", timeStr, err)
+	}
+	
+	if hour < 0 || hour > 23 {
+		return fmt.Errorf("hour must be between 00 and 23, got %d", hour)
+	}
+	if minute < 0 || minute > 59 {
+		return fmt.Errorf("minute must be between 00 and 59, got %d", minute)
+	}
+	
 	return nil
 }
 

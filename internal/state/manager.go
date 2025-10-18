@@ -66,6 +66,43 @@ func (m *Manager) Add(device Device) {
 	m.devices[device.IP] = &device
 }
 
+// AddDevice adds a device by IP address only, returns true if it's a new device
+func (m *Manager) AddDevice(ip string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// If device already exists, return false
+	if _, exists := m.devices[ip]; exists {
+		return false
+	}
+
+	// Check if we've reached the device limit
+	if len(m.devices) >= m.maxDevices {
+		// Remove the oldest device (smallest LastSeen time)
+		var oldestIP string
+		var oldestTime time.Time
+		first := true
+		for devIP, dev := range m.devices {
+			if first || dev.LastSeen.Before(oldestTime) {
+				oldestIP = devIP
+				oldestTime = dev.LastSeen
+				first = false
+			}
+		}
+		if oldestIP != "" {
+			delete(m.devices, oldestIP)
+		}
+	}
+
+	// Add the new device with minimal info
+	m.devices[ip] = &Device{
+		IP:       ip,
+		Hostname: ip,
+		LastSeen: time.Now(),
+	}
+	return true
+}
+
 // Get retrieves a device by IP address, returns nil if not found
 func (m *Manager) Get(ip string) (*Device, bool) {
 	m.mu.RLock()
@@ -94,6 +131,29 @@ func (m *Manager) UpdateLastSeen(ip string) {
 	}
 }
 
+// UpdateDeviceSNMP enriches an existing device with SNMP data
+func (m *Manager) UpdateDeviceSNMP(ip, hostname, sysDescr, sysObjectID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if dev, exists := m.devices[ip]; exists {
+		dev.Hostname = hostname
+		dev.SysDescr = sysDescr
+		dev.SysObjectID = sysObjectID
+		dev.LastSeen = time.Now()
+	}
+}
+
+// GetAllIPs returns a slice of all managed device IP addresses
+func (m *Manager) GetAllIPs() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ips := make([]string, 0, len(m.devices))
+	for ip := range m.devices {
+		ips = append(ips, ip)
+	}
+	return ips
+}
+
 // Prune removes devices not seen within the specified duration
 func (m *Manager) Prune(olderThan time.Duration) []Device {
 	m.mu.Lock()
@@ -107,4 +167,9 @@ func (m *Manager) Prune(olderThan time.Duration) []Device {
 		}
 	}
 	return removed
+}
+
+// PruneStale is an alias for Prune with a clearer name for the new architecture
+func (m *Manager) PruneStale(olderThan time.Duration) []Device {
+	return m.Prune(olderThan)
 }

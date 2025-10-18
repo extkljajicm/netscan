@@ -19,6 +19,168 @@ func RunScanIPsOnly(cidr string) []string {
 	return ipsFromCIDR(cidr)
 }
 
+// RunICMPSweep performs concurrent ICMP ping sweep across multiple networks
+// Returns only the IP addresses that responded to pings
+func RunICMPSweep(networks []string, workers int) []string {
+	if workers <= 0 {
+		workers = 64 // Default
+	}
+
+	var (
+		jobs    = make(chan string, 256)
+		results = make(chan string, 256)
+		wg      sync.WaitGroup
+	)
+
+	// Worker goroutine for ICMP ping probes
+	worker := func() {
+		defer wg.Done()
+		for ip := range jobs {
+			pinger, err := probing.NewPinger(ip)
+			if err != nil {
+				continue // Skip invalid IP addresses
+			}
+			pinger.Count = 1                 // Single ping per device
+			pinger.Timeout = 1 * time.Second // 1-second discovery timeout
+			pinger.SetPrivileged(true)       // Use raw sockets for ICMP
+			if err := pinger.Run(); err != nil {
+				continue // Skip ping failures
+			}
+			stats := pinger.Statistics()
+			if stats.PacketsRecv > 0 { // Device responded to ping
+				results <- ip
+			}
+		}
+	}
+
+	// Launch concurrent ping worker goroutines
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go worker()
+	}
+
+	// Producer: enqueue all IPs from all CIDR ranges
+	go func() {
+		for _, network := range networks {
+			ips := ipsFromCIDR(network)
+			for _, ip := range ips {
+				jobs <- ip
+			}
+		}
+		close(jobs)
+	}()
+
+	// Wait for all workers to complete, then close results channel
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect all responsive IPs
+	var responsiveIPs []string
+	for ip := range results {
+		responsiveIPs = append(responsiveIPs, ip)
+	}
+	return responsiveIPs
+}
+
+// RunSNMPScan performs concurrent SNMP queries on a list of IP addresses
+// Returns devices with SNMP data populated, gracefully handles SNMP failures
+func RunSNMPScan(ips []string, snmpConfig *config.SNMPConfig, workers int) []state.Device {
+	if workers <= 0 {
+		workers = 32 // Default
+	}
+
+	var (
+		jobs    = make(chan string, 256)
+		results = make(chan state.Device, 256)
+		wg      sync.WaitGroup
+	)
+
+	// Worker goroutine for SNMP queries
+	worker := func() {
+		defer wg.Done()
+		for ip := range jobs {
+			// Configure SNMP connection parameters
+			params := &gosnmp.GoSNMP{
+				Target:    ip,
+				Port:      uint16(snmpConfig.Port),
+				Community: snmpConfig.Community,
+				Version:   gosnmp.Version2c,
+				Timeout:   snmpConfig.Timeout,
+				Retries:   snmpConfig.Retries,
+			}
+			if err := params.Connect(); err != nil {
+				// SNMP failed, skip this device
+				log.Printf("SNMP connection failed for %s: %v", ip, err)
+				continue
+			}
+			// Query standard MIB-II system OIDs: sysName, sysDescr, sysObjectID
+			oids := []string{"1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.2.0"}
+			resp, err := params.Get(oids)
+			params.Conn.Close()
+			if err != nil || len(resp.Variables) < 3 {
+				// SNMP query failed, skip this device
+				log.Printf("SNMP query failed for %s: %v", ip, err)
+				continue
+			}
+
+			// Validate and sanitize SNMP response data
+			hostname, err := validateSNMPString(resp.Variables[0].Value, "sysName")
+			if err != nil {
+				log.Printf("Invalid sysName for %s: %v", ip, err)
+				continue
+			}
+			sysDescr, err := validateSNMPString(resp.Variables[1].Value, "sysDescr")
+			if err != nil {
+				log.Printf("Invalid sysDescr for %s: %v", ip, err)
+				continue
+			}
+			sysObjectID, err := validateSNMPString(resp.Variables[2].Value, "sysObjectID")
+			if err != nil {
+				log.Printf("Invalid sysObjectID for %s: %v", ip, err)
+				continue
+			}
+
+			dev := state.Device{
+				IP:          ip,
+				Hostname:    hostname,
+				SysDescr:    sysDescr,
+				SysObjectID: sysObjectID,
+				LastSeen:    time.Now(),
+			}
+			results <- dev
+		}
+	}
+
+	// Launch concurrent SNMP worker goroutines
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go worker()
+	}
+
+	// Producer: enqueue all IPs
+	go func() {
+		for _, ip := range ips {
+			jobs <- ip
+		}
+		close(jobs)
+	}()
+
+	// Wait for all workers to complete, then close results channel
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect all discovered devices
+	var devices []state.Device
+	for dev := range results {
+		devices = append(devices, dev)
+	}
+	return devices
+}
+
 // RunScan performs concurrent SNMPv2c discovery across configured networks
 func RunScan(cfg *config.Config) []state.Device {
 	var (
