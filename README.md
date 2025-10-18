@@ -374,6 +374,9 @@ Automated testing runs on:
 - Automated changelog generation (git-cliff)
 - Code coverage reporting
 - Release artifact creation
+
+## Troubleshooting
+
 ### ICMP Permission Denied
 ```bash
 # Manual execution
