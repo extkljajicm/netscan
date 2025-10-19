@@ -225,8 +225,6 @@ Runs the multi-ticker architecture with:
 - `-config string`: Path to configuration file (default "config.yml")
 - `-help`: Display usage information
 
-**Note**: The `--icmp-only` flag has been removed in the new architecture. The multi-ticker system efficiently handles both ICMP discovery and SNMP scanning without needing separate modes.
-
 ## Deployment
 
 ### Automated (Recommended)
