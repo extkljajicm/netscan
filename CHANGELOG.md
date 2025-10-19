@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - **CLI**: `--icmp-only` flag (no longer needed with multi-ticker architecture)
 
-## [1.0.0] - 2025-10-14
+## [Unreleased] - 2025-10-14
 
 ### Added
 - Concurrent ICMP/SNMP scanning with configurable worker pools
