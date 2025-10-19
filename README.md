@@ -69,16 +69,13 @@ The easiest way to get netscan running is with Docker Compose, which sets up bot
    
    **Important**: Update these settings in config.yml:
    - `networks`: Add your network ranges (e.g., `192.168.1.0/24`)
-   - `influxdb.token`: Set to `netscan-token` (matches docker-compose default)
-   - `influxdb.org`: Set to `test-org` (matches docker-compose default)
-   - `snmp.community`: Set to `public` (default SNMP community string)
    
-   For testing, you can use sed to quickly replace the placeholders:
-   ```bash
-   sed -i 's|\${INFLUXDB_TOKEN}|netscan-token|g' config.yml
-   sed -i 's|\${INFLUXDB_ORG}|test-org|g' config.yml
-   sed -i 's|\${SNMP_COMMUNITY}|public|g' config.yml
-   ```
+   **Note**: The InfluxDB credentials and SNMP community string use environment variables that are automatically provided by docker-compose.yml:
+   - `${INFLUXDB_TOKEN}` → `netscan-token` (default)
+   - `${INFLUXDB_ORG}` → `test-org` (default)
+   - `${SNMP_COMMUNITY}` → `public` (default)
+   
+   You can leave these as-is in config.yml. To customize for production, edit the `environment` section in `docker-compose.yml`.
 
 3. **Start the stack**
    ```bash
@@ -141,6 +138,10 @@ The `docker-compose.yml` configures:
   - Uses `host` network mode for ICMP/SNMP access to your network
   - Has `CAP_NET_RAW` capability for raw socket access (ICMP ping)
   - Mounts `config.yml` as read-only
+  - Environment variables for credential expansion:
+    - `INFLUXDB_TOKEN=netscan-token`
+    - `INFLUXDB_ORG=test-org`
+    - `SNMP_COMMUNITY=public`
   - Auto-restarts on failure
 
 - **influxdb service**:
@@ -154,23 +155,34 @@ The `docker-compose.yml` configures:
 
 ### Customizing for Production
 
-For production use, update the InfluxDB credentials in `docker-compose.yml`:
+For production use, update both the InfluxDB initialization and netscan environment variables in `docker-compose.yml`:
 
 ```yaml
-environment:
-  - DOCKER_INFLUXDB_INIT_USERNAME=your-admin-user
-  - DOCKER_INFLUXDB_INIT_PASSWORD=your-secure-password
-  - DOCKER_INFLUXDB_INIT_ORG=your-org
-  - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=your-secure-token
+services:
+  netscan:
+    environment:
+      - INFLUXDB_TOKEN=your-secure-token
+      - INFLUXDB_ORG=your-org
+      - SNMP_COMMUNITY=your-community-string
+  
+  influxdb:
+    environment:
+      - DOCKER_INFLUXDB_INIT_USERNAME=your-admin-user
+      - DOCKER_INFLUXDB_INIT_PASSWORD=your-secure-password
+      - DOCKER_INFLUXDB_INIT_ORG=your-org
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=your-secure-token
 ```
 
-Then update your `config.yml` to match:
+The config.yml file can remain unchanged - environment variables will be automatically expanded:
 ```yaml
 influxdb:
   url: "http://localhost:8086"
-  token: "your-secure-token"
-  org: "your-org"
+  token: "${INFLUXDB_TOKEN}"  # Automatically expanded from docker-compose environment
+  org: "${INFLUXDB_ORG}"      # Automatically expanded from docker-compose environment
   bucket: "netscan"
+
+snmp:
+  community: "${SNMP_COMMUNITY}"  # Automatically expanded from docker-compose environment
 ```
 
 ## Configuration

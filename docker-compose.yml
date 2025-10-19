@@ -18,6 +18,12 @@ services:
     volumes:
       - ./config.yml:/app/config.yml:ro
     
+    # Environment variables for config.yml expansion
+    environment:
+      - INFLUXDB_TOKEN=netscan-token
+      - INFLUXDB_ORG=test-org
+      - SNMP_COMMUNITY=public
+    
     # Ensure InfluxDB is started first
     depends_on:
       influxdb:
