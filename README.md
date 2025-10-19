@@ -47,6 +47,136 @@ internal/
 - `github.com/prometheus-community/pro-bing v0.7.0` - ICMP ping library
 - `gopkg.in/yaml.v3 v3.0.1` - YAML configuration parser
 
+## Quick Start with Docker (Recommended)
+
+The easiest way to get netscan running is with Docker Compose, which sets up both netscan and InfluxDB automatically.
+
+### Prerequisites
+
+- Docker Engine 20.10+
+- Docker Compose V2
+
+### Installation Steps
+
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/extkljajicm/netscan.git
+   cd netscan
+   ```
+
+2. **Create and configure config.yml**
+   ```bash
+   # Copy the example configuration
+   cp config.yml.example config.yml
+   
+   # Edit the configuration with your network settings
+   nano config.yml
+   ```
+   
+   **Important**: Update these settings in config.yml:
+   - `networks`: Add your network ranges (e.g., `192.168.1.0/24`)
+   - `influxdb.token`: Set to `netscan-token` (matches docker-compose default)
+   - `influxdb.org`: Set to `test-org` (matches docker-compose default)
+   
+   For testing, you can use sed to quickly replace the placeholders:
+   ```bash
+   sed -i 's|\${INFLUXDB_TOKEN}|netscan-token|g' config.yml
+   sed -i 's|\${INFLUXDB_ORG}|test-org|g' config.yml
+   ```
+
+3. **Start the stack**
+   ```bash
+   docker compose up -d
+   ```
+   
+   This will:
+   - Build the netscan Docker image from the local Dockerfile
+   - Start InfluxDB with persistent storage
+   - Start netscan with network monitoring capabilities
+
+4. **Verify it's running**
+   ```bash
+   # Check container status
+   docker compose ps
+   
+   # View netscan logs
+   docker compose logs -f netscan
+   
+   # View InfluxDB logs
+   docker compose logs -f influxdb
+   ```
+
+5. **Access InfluxDB UI** (optional)
+   
+   Open http://localhost:8086 in your browser
+   - Username: `admin`
+   - Password: `admin123`
+   - Organization: `test-org`
+   - Bucket: `netscan`
+
+### Managing the Docker Stack
+
+```bash
+# Stop services
+docker compose down
+
+# Stop and remove all data (including InfluxDB storage)
+docker compose down -v
+
+# Restart services
+docker compose restart
+
+# Rebuild after code changes
+docker compose up -d --build
+
+# View real-time logs
+docker compose logs -f
+
+# View logs for specific service
+docker compose logs -f netscan
+```
+
+### Docker Configuration Details
+
+The `docker-compose.yml` configures:
+
+- **netscan service**:
+  - Builds from local Dockerfile (Go 1.25)
+  - Uses `host` network mode for ICMP/SNMP access to your network
+  - Has `CAP_NET_RAW` capability for raw socket access (ICMP ping)
+  - Mounts `config.yml` as read-only
+  - Auto-restarts on failure
+
+- **influxdb service**:
+  - InfluxDB 2.7 for metrics storage
+  - Exposed on port 8086
+  - Default credentials (change for production):
+    - Token: `netscan-token`
+    - Org: `test-org`
+    - Bucket: `netscan`
+  - Persistent volume for data retention
+
+### Customizing for Production
+
+For production use, update the InfluxDB credentials in `docker-compose.yml`:
+
+```yaml
+environment:
+  - DOCKER_INFLUXDB_INIT_USERNAME=your-admin-user
+  - DOCKER_INFLUXDB_INIT_PASSWORD=your-secure-password
+  - DOCKER_INFLUXDB_INIT_ORG=your-org
+  - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=your-secure-token
+```
+
+Then update your `config.yml` to match:
+```yaml
+influxdb:
+  url: "http://localhost:8086"
+  token: "your-secure-token"
+  org: "your-org"
+  bucket: "netscan"
+```
+
 ## Installation
 
 ### Prerequisites
@@ -69,35 +199,12 @@ sudo systemctl enable docker
 sudo systemctl start docker
 ```
 
-### Setup
+### Setup for Native Build
 ```bash
 git clone https://github.com/extkljajicm/netscan.git
 cd netscan
 go mod download
-sudo docker-compose up -d  # Start test InfluxDB
 ```
-
-## Building
-
-```bash
-go build -o netscan ./cmd/netscan
-# Or use build script
-./build.sh
-```
-
-## Testing Deployment
-
-The repository includes both deployment and undeployment scripts for safe testing:
-
-```bash
-# Deploy netscan as a systemd service
-sudo ./deploy.sh
-
-# Completely uninstall and clean up (for testing)
-sudo ./undeploy.sh
-```
-
-The undeployment script provides a 100% clean removal of all components installed by `deploy.sh`.
 
 ## Configuration
 
@@ -225,48 +332,15 @@ Runs the multi-ticker architecture with:
 - `-config string`: Path to configuration file (default "config.yml")
 - `-help`: Display usage information
 
-## Deployment
+## Deployment Options
 
-### Docker (Recommended for Containers)
+### Option 1: Docker Compose (Recommended)
 
-Deploy netscan using Docker Compose for a complete monitoring stack with InfluxDB.
+See the [Quick Start with Docker](#quick-start-with-docker-recommended) section above for complete instructions.
 
-#### Quick Start with Docker Compose
+### Option 2: Native Installation with Systemd
 
-```bash
-# Clone the repository
-git clone https://github.com/extkljajicm/netscan.git
-cd netscan
-
-# Create config.yml from template
-cp config.yml.example config.yml
-
-# Edit config.yml with your network settings
-nano config.yml
-
-# Build and start the complete stack (netscan + InfluxDB)
-docker compose up -d
-
-# View logs
-docker compose logs -f netscan
-
-# Stop services
-docker compose down
-```
-
-**What this does:**
-- Builds the netscan Docker image locally from the Dockerfile
-- Starts InfluxDB for metrics storage
-- Starts netscan with host networking for ICMP/SNMP access
-- Mounts your config.yml into the container
-
-**Docker Configuration Notes:**
-- **Network Mode**: Uses `host` networking to allow netscan to access network devices for ICMP and SNMP
-- **Capabilities**: `NET_RAW` capability is added for ICMP ping functionality
-- **Config File**: Your `config.yml` is mounted as a read-only volume
-- **InfluxDB**: Pre-configured with test credentials (change for production)
-
-### Native Installation (Automated)
+#### Automated Deployment
 
 ```bash
 sudo ./deploy.sh
@@ -279,7 +353,7 @@ Creates:
 - Systemd service with network-compatible security settings
 - Secure credential management via environment variables
 
-### Native Installation (Manual)
+#### Manual Deployment
 
 ```bash
 go build -o netscan ./cmd/netscan
@@ -320,44 +394,49 @@ sudo systemctl start netscan
 
 ## Service Management
 
-### Systemd (Native Installation)
+### Docker Compose
 
 ```bash
-sudo systemctl status netscan
-sudo journalctl -u netscan -f
-sudo systemctl restart netscan
-sudo systemctl stop netscan
-```
-
-### Docker
-
-```bash
-# View container status
-docker ps -f name=netscan
-
-# View logs
-docker logs -f netscan
-
-# Restart container
-docker restart netscan
-
-### Docker
-
-```bash
-# View container status
+# View all services status
 docker compose ps
 
-# View logs
+# View logs (all services)
+docker compose logs -f
+
+# View logs (specific service)
 docker compose logs -f netscan
+docker compose logs -f influxdb
 
 # Restart services
 docker compose restart
 
-# Stop services
+# Stop services (keeps data)
 docker compose down
 
-# Rebuild and restart after code changes
+# Stop and remove all data
+docker compose down -v
+
+# Rebuild and restart after changes
 docker compose up -d --build
+```
+
+### Systemd (Native Installation)
+
+```bash
+# Check service status
+sudo systemctl status netscan
+
+# View logs
+sudo journalctl -u netscan -f
+
+# Restart service
+sudo systemctl restart netscan
+
+# Stop service
+sudo systemctl stop netscan
+
+# Start service
+sudo systemctl start netscan
 ```
 
 ## Building
@@ -447,23 +526,63 @@ Automated testing runs on push, pull requests, and version tags.
 
 ## Troubleshooting
 
-### ICMP Permission Denied
+### Docker Issues
+
+**Container keeps restarting:**
+```bash
+# Check logs for errors
+docker compose logs netscan
+
+# Common causes:
+# 1. Invalid config.yml - verify syntax and network ranges
+# 2. InfluxDB credentials mismatch - check token and org match docker-compose.yml
+# 3. Missing config.yml - ensure file exists and is mounted correctly
+```
+
+**InfluxDB connection failed:**
+```bash
+# Verify InfluxDB is healthy
+docker compose ps influxdb
+
+# Check if InfluxDB is accessible
+curl http://localhost:8086/health
+
+# Verify credentials in config.yml match docker-compose.yml:
+# - token: netscan-token
+# - org: test-org
+```
+
+**Can't access network devices:**
+```bash
+# Verify host network mode is enabled
+docker inspect netscan | grep NetworkMode
+
+# Check CAP_NET_RAW capability
+docker inspect netscan | grep -A 5 CapAdd
+```
+
+### Native Installation Issues
+
+**ICMP Permission Denied:**
 ```bash
 sudo ./netscan          # Manual execution
 getcap /opt/netscan/netscan  # Check capability
 ```
 
-### InfluxDB Connection Issues
-- Verify InfluxDB running: `docker ps`
+**InfluxDB Connection Issues:**
+- Verify InfluxDB running: `systemctl status influxdb` or `docker ps`
 - Check config credentials and API token
 - Confirm network connectivity
 
-### No Devices Discovered
-- Verify network ranges in config
+### General Issues
+
+**No Devices Discovered:**
+- Verify network ranges in config.yml (e.g., `192.168.1.0/24`)
 - Check firewall rules for ICMP/SNMP
 - Confirm SNMP community string is correct
+- Test with ping manually: `ping <device-ip>`
 
-### Performance Issues
+**Performance Issues:**
 - Start with lower worker counts (8 ICMP, 4 SNMP)
 - Monitor CPU usage with `htop` or `top`
 - Adjust based on network latency and CPU cores
