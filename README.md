@@ -197,9 +197,6 @@ cp config.yml.example config.yml
 
 Edit the following key settings:
 - `networks`: Your network ranges (e.g., `192.168.1.0/24`)
-- `influxdb.token`: `netscan-token` (matches docker-compose default)
-- `influxdb.org`: `test-org` (matches docker-compose default)
-- `snmp.community`: `public` (default SNMP community string)
 
 ### Configuration Structure
 
@@ -214,7 +211,7 @@ snmp_daily_schedule: "02:00"       # Daily SNMP scan time (HH:MM)
 
 # SNMP Settings
 snmp:
-  community: "${SNMP_COMMUNITY}"   # From .env file
+  community: "${SNMP_COMMUNITY}"   # Expanded from docker-compose environment
   port: 161
   timeout: "5s"
   retries: 1
@@ -227,11 +224,11 @@ ping_timeout: "2s"
 icmp_workers: 64                   # Concurrent ICMP workers
 snmp_workers: 32                   # Concurrent SNMP workers
 
-# InfluxDB (credentials from .env file)
+# InfluxDB (credentials from docker-compose environment)
 influxdb:
-  url: "${INFLUXDB_URL}"
-  token: "${INFLUXDB_TOKEN}"
-  org: "${INFLUXDB_ORG}"
+  url: "http://localhost:8086"
+  token: "${INFLUXDB_TOKEN}"       # Expanded from docker-compose environment
+  org: "${INFLUXDB_ORG}"           # Expanded from docker-compose environment
   bucket: "netscan"
 
 # Resource Limits

@@ -9,7 +9,7 @@ This document describes the Docker implementation for the netscan network monito
 **Location**: `/Dockerfile`
 
 A multi-stage Docker build configuration that:
-- **Stage 1 (Builder)**: Uses `golang:1.21-alpine` to compile the Go binary
+- **Stage 1 (Builder)**: Uses `golang:1.25-alpine` to compile the Go binary
   - Installs build dependencies (git, ca-certificates)
   - Leverages Docker layer caching for go modules
   - Builds a static binary with optimizations for linux/amd64

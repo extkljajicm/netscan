@@ -1,15 +1,21 @@
 # config.yml.example - netscan network monitoring configuration
 #
-# SECURITY NOTE: Sensitive credentials are loaded from a separate .env file
-# for enhanced security. The .env file is created during deployment with
-# restrictive permissions (600) and contains default test values that match
-# docker-compose.yml. For production use, update the .env file with secure
-# credentials.
+# DOCKER DEPLOYMENT:
+# When using Docker Compose, environment variables are automatically provided
+# by docker-compose.yml. Simply copy this file as-is:
+#   cp config.yml.example config.yml
 #
-# Required environment variables in .env file:
-# - INFLUXDB_TOKEN=netscan-token (default for testing)
-# - INFLUXDB_ORG=test-org (default for testing)
-# - SNMP_COMMUNITY=public (default for testing - change for production security)
+# Environment variables provided by docker-compose.yml (defaults):
+# - INFLUXDB_TOKEN=netscan-token
+# - INFLUXDB_ORG=test-org
+# - SNMP_COMMUNITY=public
+#
+# For production, customize these in the docker-compose.yml 'environment' section.
+#
+# NATIVE DEPLOYMENT:
+# For native/systemd deployment, create a .env file with these variables
+# or replace ${VAR_NAME} placeholders with actual values.
+# See README_NATIVE.md for details.
 #
 # DO NOT store actual credentials in this config.yml file!
 
@@ -34,9 +40,9 @@ snmp_daily_schedule: "02:00"
 # SNMP SETTINGS
 # =============================================================================
 # SNMPv2c community string for device authentication
-# Sensitive values are loaded from .env file (see Environment Variables section)
+# Uses environment variable expansion (Docker: docker-compose.yml, Native: .env file)
 snmp:
-  community: "${SNMP_COMMUNITY}"  # Loaded from .env file - default is 'public' for testing
+  community: "${SNMP_COMMUNITY}"  # Default: 'public' (set via docker-compose.yml or .env)
   port: 161
   timeout: "5s"
   retries: 1
@@ -63,11 +69,11 @@ snmp_workers: 32
 # INFLUXDB SETTINGS
 # =============================================================================
 # Time-series database for metrics storage
-# Sensitive values are loaded from .env file (see Environment Variables section)
+# Uses environment variable expansion (Docker: docker-compose.yml, Native: .env file)
 influxdb:
   url: "http://localhost:8086"
-  token: "${INFLUXDB_TOKEN}"  # Loaded from .env file
-  org: "${INFLUXDB_ORG}"      # Loaded from .env file
+  token: "${INFLUXDB_TOKEN}"  # Default: 'netscan-token' (set via docker-compose.yml or .env)
+  org: "${INFLUXDB_ORG}"      # Default: 'test-org' (set via docker-compose.yml or .env)
   bucket: "netscan"
 
 # =============================================================================
