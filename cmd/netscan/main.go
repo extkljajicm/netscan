@@ -113,8 +113,11 @@ func main() {
 					// Write device info to InfluxDB
 					if err := writer.WriteDeviceInfo(dev.IP, dev.Hostname, dev.Hostname, dev.SysDescr, dev.SysObjectID); err != nil {
 						log.Printf("Failed to write device info for %s: %v", dev.IP, err)
+					} else {
+						log.Printf("Device enriched and written to InfluxDB: %s (%s)", dev.IP, dev.Hostname)
 					}
-					log.Printf("Device enriched: %s (%s)", dev.IP, dev.Hostname)
+				} else {
+					log.Printf("SNMP scan failed for new device %s, will retry in next daily scan", newIP)
 				}
 			}(ip)
 		}
@@ -182,8 +185,11 @@ func main() {
 							// Write device info to InfluxDB
 							if err := writer.WriteDeviceInfo(dev.IP, dev.Hostname, dev.Hostname, dev.SysDescr, dev.SysObjectID); err != nil {
 								log.Printf("Failed to write device info for %s: %v", dev.IP, err)
+							} else {
+								log.Printf("Device enriched and written to InfluxDB: %s (%s)", dev.IP, dev.Hostname)
 							}
-							log.Printf("Device enriched: %s (%s)", dev.IP, dev.Hostname)
+						} else {
+							log.Printf("SNMP scan failed for new device %s, will retry in next daily scan", newIP)
 						}
 					}(ip)
 				}
@@ -195,16 +201,20 @@ func main() {
 			allIPs := stateMgr.GetAllIPs()
 			log.Printf("Performing SNMP scan on %d devices...", len(allIPs))
 			snmpDevices := discovery.RunSNMPScan(allIPs, &cfg.SNMP, cfg.SnmpWorkers)
-			log.Printf("SNMP scan complete, enriched %d devices", len(snmpDevices))
+			log.Printf("SNMP scan complete, enriched %d devices (failed: %d)", len(snmpDevices), len(allIPs)-len(snmpDevices))
 			
+			successCount := 0
 			for _, dev := range snmpDevices {
 				stateMgr.UpdateDeviceSNMP(dev.IP, dev.Hostname, dev.SysDescr, dev.SysObjectID)
 				// Write device info to InfluxDB
 				if err := writer.WriteDeviceInfo(dev.IP, dev.Hostname, dev.Hostname, dev.SysDescr, dev.SysObjectID); err != nil {
 					log.Printf("Failed to write device info for %s: %v", dev.IP, err)
+				} else {
+					log.Printf("Device info written to InfluxDB: %s (%s)", dev.IP, dev.Hostname)
+					successCount++
 				}
 			}
-			log.Println("Daily SNMP scan complete.")
+			log.Printf("Daily SNMP scan complete. Successfully written to InfluxDB: %d devices", successCount)
 
 		case <-reconciliationTicker.C:
 			// Pinger Reconciliation: Ensure all devices have pingers
