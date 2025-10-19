@@ -17,13 +17,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Immediate SNMP scan when new device discovered
   - Scheduled daily SNMP scan for all known devices
   - Reduced overhead compared to previous full scan every 4 hours
+- **InfluxDB Schema**: Simplified device_info measurement
+  - Removed redundant `snmp_name` field (hostname already stored)
+  - Removed `snmp_sysid` field (sysObjectID not needed for monitoring)
+  - Cleaner schema: hostname and snmp_description only
 - **Configuration**: Removed `--icmp-only` flag (no longer needed with new architecture)
 - **Configuration**: Added `-config` flag support for specifying config file path
+- **Configuration**: Removed deprecated `discovery_interval` from config.yml.example
 
 ### Added
 - **New Configuration Field**: `snmp_daily_schedule` (HH:MM format) for scheduling daily SNMP scans
 - **New State Manager Methods**: `AddDevice()`, `UpdateDeviceSNMP()`, `GetAllIPs()`, `PruneStale()`
 - **New Scanner Functions**: `RunICMPSweep()` and `RunSNMPScan()` for composable discovery operations
+- **SNMP Robustness**: GetNext fallback for devices without .0 OID instances
+- **SNMP Type Handling**: Support for byte array OctetString values
 - **Documentation**: Added `REFACTORING_SUMMARY.md` with technical details of all changes
 - **Documentation**: Added `MIGRATION_GUIDE.md` with step-by-step deployment instructions
 
@@ -63,15 +70,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Default ICMP workers: 64
   - Default SNMP workers: 32
   - Allows performance tuning based on system capabilities
-- **Enhanced Metrics**: SNMP data now included in InfluxDB metrics as additional fields
-  - `snmp_name`: Device hostname/SNMP sysName
-  - `snmp_description`: SNMP sysDescr MIB-II value
-  - `snmp_sysid`: SNMP sysObjectID MIB-II value
-  - Maintains existing tags (ip, hostname) and fields (rtt_ms, success)
 - **Optimized Metrics Storage**: Separated ping metrics from device metadata for better cardinality
   - `ping` measurement: IP tag only, rtt/success fields (high-frequency)
-  - `device_info` measurement: Device metadata stored once per discovery (low-frequency)
-  - Eliminates redundant SNMP data storage on every ping measurement
+  - `device_info` measurement: IP tag, hostname and snmp_description fields (low-frequency)
+  - Device metadata stored once per discovery, not on every ping
 - **CI/CD Pipeline**: GitHub Actions workflow for automated testing, building, and releases
   - Linux amd64 binary builds
   - Automated changelog generation with git-cliff

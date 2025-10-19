@@ -15,7 +15,7 @@ import (
 // PingWriter interface for writing ping results to external storage
 type PingWriter interface {
 	WritePingResult(ip string, rtt time.Duration, successful bool) error
-	WriteDeviceInfo(ip, hostname, sysName, sysDescr, sysObjectID string) error
+	WriteDeviceInfo(ip, hostname, sysDescr string) error
 }
 
 // StateManager interface for updating device last seen timestamp

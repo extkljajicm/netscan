@@ -485,7 +485,7 @@ The new architecture uses four independent tickers:
 
 2. **Daily SNMP Scan Ticker** (at `snmp_daily_schedule`, e.g., 02:00):
    - Full SNMP scan of all devices in StateManager
-   - Enriches devices with hostname, sysDescr, and sysObjectID
+   - Enriches devices with hostname and sysDescr
    - Updates device info in InfluxDB
 
 3. **Pinger Reconciliation Ticker** (every 5 seconds):
@@ -506,8 +506,13 @@ The new architecture uses four independent tickers:
 ### Metrics Storage
 - Measurement: "ping"
 - Tags: "ip", "hostname"
-- Fields: "rtt_ms" (float), "success" (boolean), "snmp_name" (string), "snmp_description" (string), "snmp_sysid" (string)
+- Fields: "rtt_ms" (float), "success" (boolean)
 - Point-based writes with error handling
+
+- Measurement: "device_info"
+- Tags: "ip"
+- Fields: "hostname" (string), "snmp_description" (string)
+- Stored once per device or when SNMP data changes
 
 ### Security Model
 - Linux capabilities: CAP_NET_RAW for raw socket access

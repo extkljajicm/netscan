@@ -111,7 +111,7 @@ func main() {
 					dev := snmpDevices[0]
 					stateMgr.UpdateDeviceSNMP(dev.IP, dev.Hostname, dev.SysDescr, dev.SysObjectID)
 					// Write device info to InfluxDB
-					if err := writer.WriteDeviceInfo(dev.IP, dev.Hostname, dev.Hostname, dev.SysDescr, dev.SysObjectID); err != nil {
+					if err := writer.WriteDeviceInfo(dev.IP, dev.Hostname, dev.SysDescr); err != nil {
 						log.Printf("Failed to write device info for %s: %v", dev.IP, err)
 					} else {
 						log.Printf("Device enriched and written to InfluxDB: %s (%s)", dev.IP, dev.Hostname)
@@ -183,7 +183,7 @@ func main() {
 							dev := snmpDevices[0]
 							stateMgr.UpdateDeviceSNMP(dev.IP, dev.Hostname, dev.SysDescr, dev.SysObjectID)
 							// Write device info to InfluxDB
-							if err := writer.WriteDeviceInfo(dev.IP, dev.Hostname, dev.Hostname, dev.SysDescr, dev.SysObjectID); err != nil {
+							if err := writer.WriteDeviceInfo(dev.IP, dev.Hostname, dev.SysDescr); err != nil {
 								log.Printf("Failed to write device info for %s: %v", dev.IP, err)
 							} else {
 								log.Printf("Device enriched and written to InfluxDB: %s (%s)", dev.IP, dev.Hostname)
@@ -207,7 +207,7 @@ func main() {
 			for _, dev := range snmpDevices {
 				stateMgr.UpdateDeviceSNMP(dev.IP, dev.Hostname, dev.SysDescr, dev.SysObjectID)
 				// Write device info to InfluxDB
-				if err := writer.WriteDeviceInfo(dev.IP, dev.Hostname, dev.Hostname, dev.SysDescr, dev.SysObjectID); err != nil {
+				if err := writer.WriteDeviceInfo(dev.IP, dev.Hostname, dev.SysDescr); err != nil {
 					log.Printf("Failed to write device info for %s: %v", dev.IP, err)
 				} else {
 					log.Printf("Device info written to InfluxDB: %s (%s)", dev.IP, dev.Hostname)

@@ -28,7 +28,7 @@ func (m *mockWriter) WritePingResult(ip string, rtt time.Duration, successful bo
 	return nil
 }
 
-func (m *mockWriter) WriteDeviceInfo(ip, hostname, sysName, sysDescr, sysObjectID string) error {
+func (m *mockWriter) WriteDeviceInfo(ip, hostname, sysDescr string) error {
 	m.deviceInfoCalled = true
 	m.deviceIP = ip
 	m.deviceHostname = hostname
