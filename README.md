@@ -227,7 +227,69 @@ Runs the multi-ticker architecture with:
 
 ## Deployment
 
-### Automated (Recommended)
+### Docker (Recommended for Containers)
+
+The netscan application is available as a Docker image from GitHub Container Registry.
+
+#### Quick Start with Docker Compose
+
+```bash
+# Create config.yml from template
+cp config.yml.example config.yml
+
+# Edit config.yml with your settings
+nano config.yml
+
+# Start netscan with InfluxDB using docker-compose
+docker-compose -f docker-compose.netscan.yml up -d
+
+# View logs
+docker-compose -f docker-compose.netscan.yml logs -f netscan
+
+# Stop services
+docker-compose -f docker-compose.netscan.yml down
+```
+
+#### Pull and Run Docker Image
+
+```bash
+# Pull the latest image
+docker pull ghcr.io/extkljajicm/netscan:latest
+
+# Run with host networking (required for ICMP/SNMP access)
+docker run -d \
+  --name netscan \
+  --network host \
+  --cap-add=NET_RAW \
+  -v $(pwd)/config.yml:/app/config.yml:ro \
+  -e INFLUXDB_TOKEN=your-token \
+  -e SNMP_COMMUNITY=your-community \
+  ghcr.io/extkljajicm/netscan:latest
+```
+
+#### Build Docker Image Locally
+
+```bash
+# Build the image
+docker build -t netscan:local .
+
+# Run the locally built image
+docker run -d \
+  --name netscan \
+  --network host \
+  --cap-add=NET_RAW \
+  -v $(pwd)/config.yml:/app/config.yml:ro \
+  netscan:local
+```
+
+**Docker Configuration Notes:**
+- **Network Mode**: Use `--network host` to allow netscan to access network devices for ICMP and SNMP
+- **Capabilities**: `--cap-add=NET_RAW` is required for ICMP ping functionality
+- **Config File**: Mount your `config.yml` as a read-only volume
+- **Environment Variables**: Pass sensitive credentials via environment variables instead of storing in config
+- **Available Tags**: `latest`, `main`, version tags (e.g., `v1.0.0`), and commit SHAs
+
+### Native Installation (Automated)
 
 ```bash
 sudo ./deploy.sh
@@ -240,7 +302,7 @@ Creates:
 - Systemd service with network-compatible security settings
 - Secure credential management via environment variables
 
-### Manual
+### Native Installation (Manual)
 
 ```bash
 go build -o netscan ./cmd/netscan
@@ -281,6 +343,8 @@ sudo systemctl start netscan
 
 ## Service Management
 
+### Systemd (Native Installation)
+
 ```bash
 sudo systemctl status netscan
 sudo journalctl -u netscan -f
@@ -288,9 +352,42 @@ sudo systemctl restart netscan
 sudo systemctl stop netscan
 ```
 
+### Docker
+
+```bash
+# View container status
+docker ps -f name=netscan
+
+# View logs
+docker logs -f netscan
+
+# Restart container
+docker restart netscan
+
+# Stop container
+docker stop netscan
+
+# Remove container
+docker rm netscan
+```
+
 ## Building
 
-### Automated Build
+### Docker Image
+
+Docker images are automatically built and published via GitHub Actions on every push to main and on version tags. See `.github/workflows/dockerize_netscan.yml` for details.
+
+```bash
+# Build locally
+docker build -t netscan:local .
+
+# Build for multiple platforms (requires buildx)
+docker buildx build --platform linux/amd64,linux/arm64 -t netscan:local .
+```
+
+### Native Binary
+
+#### Automated Build
 
 ```bash
 ./build.sh
@@ -298,18 +395,26 @@ sudo systemctl stop netscan
 
 Builds the netscan binary with optimized settings.
 
-### Manual Build
+#### Manual Build
 
 ```bash
 go build -o netscan ./cmd/netscan
 ```
 
-### Cross-Platform Builds
+#### Cross-Platform Builds
 
-The CI/CD pipeline builds for Linux amd64 only.
-
-**Current Build Target:**
+**Docker Images (via GitHub Actions):**
 - Linux (amd64)
+- Linux (arm64)
+
+**Native Binaries (via CI/CD):**
+- Linux (amd64)
+
+For custom platform builds, use Go's cross-compilation:
+```bash
+GOOS=linux GOARCH=arm64 go build -o netscan-arm64 ./cmd/netscan
+GOOS=darwin GOARCH=amd64 go build -o netscan-macos ./cmd/netscan
+```
 
 ## Testing
 

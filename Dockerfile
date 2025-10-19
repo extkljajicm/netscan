@@ -1,0 +1,58 @@
+# Multi-stage build for netscan
+# Stage 1: Build the Go binary
+FROM golang:1.21-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git ca-certificates
+
+# Set working directory
+WORKDIR /build
+
+# Copy go mod files first for better caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the binary with optimizations
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s" \
+    -o netscan \
+    ./cmd/netscan
+
+# Stage 2: Create minimal runtime image
+FROM alpine:latest
+
+# Install runtime dependencies
+RUN apk add --no-cache ca-certificates libcap
+
+# Create non-root user for running the service
+RUN addgroup -S netscan && adduser -S netscan -G netscan
+
+# Set working directory
+WORKDIR /app
+
+# Copy binary from builder stage
+COPY --from=builder /build/netscan /app/netscan
+
+# Copy config template
+COPY config.yml.example /app/config.yml.example
+
+# Set CAP_NET_RAW capability for ICMP access
+RUN setcap cap_net_raw+ep /app/netscan
+
+# Change ownership to non-root user
+RUN chown -R netscan:netscan /app
+
+# Switch to non-root user
+USER netscan
+
+# Set default config path (can be overridden with -config flag)
+ENV CONFIG_PATH=/app/config.yml
+
+# Expose no ports by default (netscan is a client application)
+
+# Run netscan
+ENTRYPOINT ["/app/netscan"]
+CMD ["-config", "/app/config.yml"]
