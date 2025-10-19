@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # netscan service - network monitoring application
   netscan:

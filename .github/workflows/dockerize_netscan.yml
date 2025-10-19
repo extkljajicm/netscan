@@ -19,7 +19,10 @@ jobs:
     - name: Create config.yml from template
       run: |
         cp config.yml.example config.yml
-        echo "Config file created from template"
+        # Replace environment variables with actual values that match docker-compose.yml
+        sed -i 's|\${INFLUXDB_TOKEN}|netscan-token|g' config.yml
+        sed -i 's|\${INFLUXDB_ORG}|test-org|g' config.yml
+        echo "Config file created and configured with test credentials"
 
     - name: Build and start Docker Compose stack
       run: |
@@ -49,6 +52,8 @@ jobs:
           echo "✓ netscan service is running"
         else
           echo "✗ netscan service is not running"
+          echo "Showing last 50 lines of netscan logs:"
+          docker compose logs --tail=50 netscan
           exit 1
         fi
 
