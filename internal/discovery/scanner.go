@@ -38,12 +38,14 @@ func RunICMPSweep(networks []string, workers int) []string {
 		for ip := range jobs {
 			pinger, err := probing.NewPinger(ip)
 			if err != nil {
+				log.Printf("Failed to create pinger for %s: %v", ip, err)
 				continue // Skip invalid IP addresses
 			}
 			pinger.Count = 1                 // Single ping per device
 			pinger.Timeout = 1 * time.Second // 1-second discovery timeout
 			pinger.SetPrivileged(true)       // Use raw sockets for ICMP
 			if err := pinger.Run(); err != nil {
+				log.Printf("Ping failed for %s: %v", ip, err)
 				continue // Skip ping failures
 			}
 			stats := pinger.Statistics()
