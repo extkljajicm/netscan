@@ -63,21 +63,41 @@ The easiest way to get netscan running is with Docker Compose, which sets up bot
    # Copy the example configuration
    cp config.yml.example config.yml
    
-   # Edit the configuration with your network settings
+   # Edit the configuration with your actual network settings
    nano config.yml
    ```
    
-   **Important**: Update these settings in config.yml:
-   - `networks`: Add your network ranges (e.g., `192.168.1.0/24`)
+   **IMPORTANT**: You must update the `networks` section in config.yml with your actual network ranges:
+   ```yaml
+   networks:
+     - "192.168.1.0/24"    # Replace with your actual network
+     # - "10.0.0.0/16"     # Add more networks as needed
+   ```
    
-   **Note**: The InfluxDB credentials and SNMP community string use environment variables that are automatically provided by docker-compose.yml:
-   - `${INFLUXDB_TOKEN}` → `netscan-token` (default)
-   - `${INFLUXDB_ORG}` → `test-org` (default)
-   - `${SNMP_COMMUNITY}` → `public` (default)
-   
-   You can leave these as-is in config.yml. To customize for production, edit the `environment` section in `docker-compose.yml`.
+   The default example networks (192.168.0.0/24, 10.0.0.0/16, 172.16.0.0/12) are placeholders. 
+   If netscan finds 0 devices, it means these ranges don't match your network.
 
-3. **Start the stack**
+3. **(Optional) Configure credentials with .env file**
+   
+   For production security, use a .env file instead of hardcoded values in docker-compose.yml:
+   ```bash
+   # Copy the example .env file
+   cp .env.example .env
+   
+   # Edit with secure credentials
+   nano .env
+   ```
+   
+   Update at minimum:
+   - `INFLUXDB_TOKEN` - Use a strong random token
+   - `DOCKER_INFLUXDB_INIT_PASSWORD` - Use a strong password
+   - `SNMP_COMMUNITY` - Change from default 'public'
+   
+   The .env file is in .gitignore and won't be committed to git.
+   
+   **Note**: If you don't create a .env file, docker-compose.yml will use the default test values.
+
+4. **Start the stack**
    ```bash
    docker compose up -d
    ```
@@ -86,8 +106,9 @@ The easiest way to get netscan running is with Docker Compose, which sets up bot
    - Build the netscan Docker image from the local Dockerfile
    - Start InfluxDB with persistent storage
    - Start netscan with network monitoring capabilities
+   - Use credentials from .env file if present, or defaults
 
-4. **Verify it's running**
+5. **Verify it's running**
    ```bash
    # Check container status
    docker compose ps
@@ -138,24 +159,46 @@ The `docker-compose.yml` configures:
   - Uses `host` network mode for ICMP/SNMP access to your network
   - Has `CAP_NET_RAW` capability for raw socket access (ICMP ping)
   - Mounts `config.yml` as read-only
-  - Environment variables for credential expansion:
-    - `INFLUXDB_TOKEN=netscan-token`
-    - `INFLUXDB_ORG=test-org`
-    - `SNMP_COMMUNITY=public`
+  - Environment variables from .env file or defaults:
+    - `INFLUXDB_TOKEN` (default: netscan-token)
+    - `INFLUXDB_ORG` (default: test-org)
+    - `SNMP_COMMUNITY` (default: public)
   - Auto-restarts on failure
 
 - **influxdb service**:
   - InfluxDB 2.7 for metrics storage
   - Exposed on port 8086
-  - Default credentials (change for production):
-    - Token: `netscan-token`
-    - Org: `test-org`
-    - Bucket: `netscan`
+  - Environment variables from .env file or defaults
   - Persistent volume for data retention
 
 ### Customizing for Production
 
-For production use, update both the InfluxDB initialization and netscan environment variables in `docker-compose.yml`:
+**Recommended: Use .env file** (more secure than editing docker-compose.yml):
+
+1. Create .env file from example:
+   ```bash
+   cp .env.example .env
+   chmod 600 .env  # Restrict file permissions
+   ```
+
+2. Edit .env with secure credentials:
+   ```bash
+   # Generate a secure token
+   openssl rand -base64 32
+   
+   # Update .env file
+   INFLUXDB_TOKEN=<your-secure-token>
+   DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=<your-secure-token>
+   DOCKER_INFLUXDB_INIT_PASSWORD=<your-secure-password>
+   SNMP_COMMUNITY=<your-community-string>
+   ```
+
+3. Start with .env file:
+   ```bash
+   docker compose up -d
+   ```
+
+**Alternative: Edit docker-compose.yml directly** (less secure, values visible in git):
 
 ```yaml
 services:
@@ -172,6 +215,12 @@ services:
       - DOCKER_INFLUXDB_INIT_ORG=your-org
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=your-secure-token
 ```
+
+**Security Notes**:
+- .env file is in .gitignore and won't be committed
+- Always use strong, random tokens in production
+- Change default SNMP community from 'public'
+- Restrict .env file permissions: `chmod 600 .env`
 
 The config.yml file can remain unchanged - environment variables will be automatically expanded:
 ```yaml
@@ -287,6 +336,31 @@ docker build -t netscan:local .
 ## Troubleshooting
 
 ### Docker Issues
+
+**Container is running but finding 0 devices:**
+```bash
+# Check logs to see what networks are being scanned
+docker compose logs netscan | grep "discovery"
+
+# Common causes:
+# 1. Network ranges in config.yml don't match your actual network
+#    Solution: Update config.yml with your real network ranges
+#    Example: If your network is 192.168.1.0/24, update:
+#    networks:
+#      - "192.168.1.0/24"
+
+# 2. Verify network mode is 'host' (required for ICMP)
+docker inspect netscan | grep NetworkMode
+# Should show: "NetworkMode": "host"
+
+# 3. Check if container has CAP_NET_RAW capability
+docker inspect netscan | grep -A 5 CapAdd
+# Should show: "CAP_NET_RAW"
+
+# 4. Test ping manually from container
+docker exec -it netscan ping -c 2 192.168.1.1
+# Replace with an IP from your network
+```
 
 **Container keeps restarting:**
 ```bash

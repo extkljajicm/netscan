@@ -19,10 +19,12 @@ services:
       - ./config.yml:/app/config.yml:ro
     
     # Environment variables for config.yml expansion
+    # For production: Create a .env file with these variables to avoid storing credentials here
+    # See README.md for details on using .env file
     environment:
-      - INFLUXDB_TOKEN=netscan-token
-      - INFLUXDB_ORG=test-org
-      - SNMP_COMMUNITY=public
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN:-netscan-token}
+      - INFLUXDB_ORG=${INFLUXDB_ORG:-test-org}
+      - SNMP_COMMUNITY=${SNMP_COMMUNITY:-public}
     
     # Ensure InfluxDB is started first
     depends_on:
@@ -36,13 +38,13 @@ services:
     ports:
       - "8086:8086"
     environment:
-      - DOCKER_INFLUXDB_INIT_MODE=setup
-      - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=admin123
-      - DOCKER_INFLUXDB_INIT_ORG=test-org
-      - DOCKER_INFLUXDB_INIT_BUCKET=netscan
-      - DOCKER_INFLUXDB_INIT_RETENTION=1w
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=netscan-token
+      - DOCKER_INFLUXDB_INIT_MODE=${DOCKER_INFLUXDB_INIT_MODE:-setup}
+      - DOCKER_INFLUXDB_INIT_USERNAME=${DOCKER_INFLUXDB_INIT_USERNAME:-admin}
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${DOCKER_INFLUXDB_INIT_PASSWORD:-admin123}
+      - DOCKER_INFLUXDB_INIT_ORG=${DOCKER_INFLUXDB_INIT_ORG:-test-org}
+      - DOCKER_INFLUXDB_INIT_BUCKET=${DOCKER_INFLUXDB_INIT_BUCKET:-netscan}
+      - DOCKER_INFLUXDB_INIT_RETENTION=${DOCKER_INFLUXDB_INIT_RETENTION:-1w}
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${DOCKER_INFLUXDB_INIT_ADMIN_TOKEN:-netscan-token}
     volumes:
       - influxdbv2-data:/var/lib/influxdb2
     healthcheck:
