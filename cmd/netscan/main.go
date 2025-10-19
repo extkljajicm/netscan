@@ -97,6 +97,7 @@ func main() {
 
 	// Run initial ICMP discovery at startup
 	log.Println("Starting ICMP discovery scan...")
+	log.Printf("Scanning networks: %v", cfg.Networks)
 	responsiveIPs := discovery.RunICMPSweep(cfg.Networks, cfg.IcmpWorkers)
 	log.Printf("ICMP discovery found %d online devices", len(responsiveIPs))
 	
@@ -169,6 +170,7 @@ func main() {
 			// ICMP Discovery: Find new devices
 			checkMemoryUsage()
 			log.Println("Starting ICMP discovery scan...")
+			log.Printf("Scanning networks: %v", cfg.Networks)
 			responsiveIPs := discovery.RunICMPSweep(cfg.Networks, cfg.IcmpWorkers)
 			log.Printf("ICMP discovery found %d online devices", len(responsiveIPs))
 			
