@@ -14,37 +14,21 @@
 # DO NOT store actual credentials in this config.yml file!
 
 # =============================================================================
-# DISCOVERY SETTINGS
+# NETWORK DISCOVERY SETTINGS
 # =============================================================================
-# How often to run the full SNMP discovery scan (ICMP sweep + SNMP polling)
-discovery_interval: "4h"
-
-# How often to run ICMP discovery in --icmp-only mode
-icmp_discovery_interval: "5m"
-
 # Network ranges to scan (CIDR notation) - supports multiple subnets
 networks:
   - "192.168.0.0/24"
   - "10.0.0.0/16"
   - "172.16.0.0/12"
 
-# =============================================================================
-# PERFORMANCE TUNING
-# =============================================================================
-# Number of concurrent ICMP ping workers (recommended: 2-4x CPU cores)
-icmp_workers: 64
+# How often to run ICMP discovery to find new devices
+icmp_discovery_interval: "5m"
 
-# Number of concurrent SNMP polling workers (recommended: 1-2x CPU cores)
-snmp_workers: 32
-
-# =============================================================================
-# MONITORING SETTINGS
-# =============================================================================
-# Ping frequency per monitored device
-ping_interval: "2s"
-
-# Timeout for individual ping operations
-ping_timeout: "2s"
+# Daily scheduled SNMP scan time (HH:MM format in 24-hour time)
+# Full SNMP scan of all known devices runs once per day at this time
+# Leave empty to disable scheduled SNMP scans (only immediate scans on device discovery)
+snmp_daily_schedule: "02:00"
 
 # =============================================================================
 # SNMP SETTINGS
@@ -56,6 +40,24 @@ snmp:
   port: 161
   timeout: "5s"
   retries: 1
+
+# =============================================================================
+# MONITORING SETTINGS
+# =============================================================================
+# Ping frequency per monitored device
+ping_interval: "2s"
+
+# Timeout for individual ping operations
+ping_timeout: "2s"
+
+# =============================================================================
+# PERFORMANCE TUNING
+# =============================================================================
+# Number of concurrent ICMP ping workers (recommended: 2-4x CPU cores)
+icmp_workers: 64
+
+# Number of concurrent SNMP polling workers (recommended: 1-2x CPU cores)
+snmp_workers: 32
 
 # =============================================================================
 # INFLUXDB SETTINGS

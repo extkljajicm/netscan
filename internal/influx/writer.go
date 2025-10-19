@@ -56,7 +56,7 @@ func (w *Writer) HealthCheck() error {
 }
 
 // WriteDeviceInfo writes device metadata to InfluxDB (call once per device or when SNMP data changes)
-func (w *Writer) WriteDeviceInfo(ip, hostname, sysName, sysDescr, sysObjectID string) error {
+func (w *Writer) WriteDeviceInfo(ip, hostname, sysDescr string) error {
 	// Validate IP address
 	if err := validateIPAddress(ip); err != nil {
 		return fmt.Errorf("invalid IP address for device info: %v", err)
@@ -64,9 +64,7 @@ func (w *Writer) WriteDeviceInfo(ip, hostname, sysName, sysDescr, sysObjectID st
 
 	// Sanitize string fields to prevent injection or corruption
 	hostname = sanitizeInfluxString(hostname, "hostname")
-	sysName = sanitizeInfluxString(sysName, "sysName")
 	sysDescr = sanitizeInfluxString(sysDescr, "sysDescr")
-	sysObjectID = sanitizeInfluxString(sysObjectID, "sysObjectID")
 
 	// Rate limiting
 	w.rateLimit()
@@ -74,9 +72,7 @@ func (w *Writer) WriteDeviceInfo(ip, hostname, sysName, sysDescr, sysObjectID st
 	p := influxdb2.NewPointWithMeasurement("device_info")
 	p.AddTag("ip", ip) // Stable identifier
 	p.AddField("hostname", hostname)
-	p.AddField("snmp_name", sysName)
 	p.AddField("snmp_description", sysDescr)
-	p.AddField("snmp_sysid", sysObjectID)
 	p.SetTime(time.Now())
 	
 	// Add timeout to prevent indefinite blocking

@@ -38,6 +38,7 @@ type Config struct {
 	PingInterval          time.Duration  `yaml:"ping_interval"`
 	PingTimeout           time.Duration  `yaml:"ping_timeout"`
 	InfluxDB              InfluxDBConfig `yaml:"influxdb"`
+	SNMPDailySchedule     string         `yaml:"snmp_daily_schedule"` // Daily SNMP scan time (HH:MM format)
 	// Resource protection settings
 	MaxConcurrentPingers int           `yaml:"max_concurrent_pingers"`
 	MaxDevices           int           `yaml:"max_devices"`
@@ -64,6 +65,7 @@ func LoadConfig(path string) (*Config, error) {
 		PingInterval          string         `yaml:"ping_interval"`
 		PingTimeout           string         `yaml:"ping_timeout"`
 		InfluxDB              InfluxDBConfig `yaml:"influxdb"`
+		SNMPDailySchedule     string         `yaml:"snmp_daily_schedule"`
 		// Resource protection settings
 		MaxConcurrentPingers int    `yaml:"max_concurrent_pingers"`
 		MaxDevices           int    `yaml:"max_devices"`
@@ -77,21 +79,29 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	// Parse string durations to time.Duration
-	discoveryInterval, err := time.ParseDuration(raw.DiscoveryInterval)
-	if err != nil {
-		return nil, err
+	// discovery_interval is optional for backward compatibility (deprecated in new architecture)
+	var discoveryInterval time.Duration
+	if raw.DiscoveryInterval != "" {
+		discoveryInterval, err = time.ParseDuration(raw.DiscoveryInterval)
+		if err != nil {
+			return nil, fmt.Errorf("invalid discovery_interval: %v", err)
+		}
+	} else {
+		// Default to 4h if not specified (backward compatibility)
+		discoveryInterval = 4 * time.Hour
 	}
+	
 	icmpDiscoveryInterval, err := time.ParseDuration(raw.IcmpDiscoveryInterval)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid icmp_discovery_interval: %v", err)
 	}
 	pingInterval, err := time.ParseDuration(raw.PingInterval)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid ping_interval: %v", err)
 	}
 	pingTimeout, err := time.ParseDuration(raw.PingTimeout)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid ping_timeout: %v", err)
 	}
 
 	// Parse MinScanInterval if specified
@@ -99,7 +109,7 @@ func LoadConfig(path string) (*Config, error) {
 	if raw.MinScanInterval != "" {
 		minScanInterval, err = time.ParseDuration(raw.MinScanInterval)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("invalid min_scan_interval: %v", err)
 		}
 	}
 
@@ -145,6 +155,7 @@ func LoadConfig(path string) (*Config, error) {
 		PingInterval:          pingInterval,
 		PingTimeout:           pingTimeout,
 		InfluxDB:              raw.InfluxDB,
+		SNMPDailySchedule:     raw.SNMPDailySchedule,
 		MaxConcurrentPingers:  raw.MaxConcurrentPingers,
 		MaxDevices:            raw.MaxDevices,
 		MinScanInterval:       minScanInterval,
@@ -184,6 +195,13 @@ func ValidateConfig(cfg *Config) (string, error) {
 	}
 	if cfg.PingInterval < time.Second {
 		return "", fmt.Errorf("ping_interval must be at least 1 second, got %v", cfg.PingInterval)
+	}
+
+	// Validate SNMP daily schedule format (HH:MM)
+	if cfg.SNMPDailySchedule != "" {
+		if err := validateTimeFormat(cfg.SNMPDailySchedule); err != nil {
+			return "", fmt.Errorf("snmp_daily_schedule validation failed: %v", err)
+		}
 	}
 
 	// Validate SNMP settings
@@ -346,6 +364,34 @@ func validateURL(urlStr string) error {
 		// For now, just continue - the user may be using docker-compose for testing
 	}
 
+	return nil
+}
+
+// validateTimeFormat validates time in HH:MM format (24-hour)
+func validateTimeFormat(timeStr string) error {
+	if len(timeStr) != 5 {
+		return fmt.Errorf("time must be in HH:MM format, got %s", timeStr)
+	}
+	
+	parts := strings.Split(timeStr, ":")
+	if len(parts) != 2 {
+		return fmt.Errorf("time must be in HH:MM format, got %s", timeStr)
+	}
+	
+	// Parse hours
+	var hour, minute int
+	_, err := fmt.Sscanf(timeStr, "%02d:%02d", &hour, &minute)
+	if err != nil {
+		return fmt.Errorf("invalid time format %s: %v", timeStr, err)
+	}
+	
+	if hour < 0 || hour > 23 {
+		return fmt.Errorf("hour must be between 00 and 23, got %d", hour)
+	}
+	if minute < 0 || minute > 59 {
+		return fmt.Errorf("minute must be between 00 and 59, got %d", minute)
+	}
+	
 	return nil
 }
 

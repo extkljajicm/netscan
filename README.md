@@ -4,14 +4,18 @@ Network monitoring service written in Go that performs ICMP ping monitoring of d
 
 ## Overview
 
-Performs two-phase network discovery: ICMP ping sweeps followed by SNMP polling of online devices. Continuously monitors device availability and latency.
+Performs decoupled network discovery and monitoring with four independent tickers: ICMP discovery finds new devices, scheduled SNMP scans enrich device data, pinger reconciliation ensures continuous monitoring, and state pruning removes stale devices. This architecture provides efficient resource usage and fast response to network changes.
 
 ## Features
 
-- **Two-Phase Discovery**: ICMP sweep (configurable workers) then SNMP polling (configurable workers) on online devices
-- **Dual Modes**: Full discovery (ICMP + SNMP) or ICMP-only mode
+- **Multi-Ticker Architecture**: Four independent tickers for decoupled operations
+  - ICMP Discovery (every 5m) - Finds new responsive devices
+  - Daily SNMP Scan (scheduled) - Enriches all devices with SNMP data
+  - Pinger Reconciliation (every 5s) - Ensures all devices monitored
+  - State Pruning (every 1h) - Removes stale devices
+- **Dual-Trigger SNMP**: Immediate scan for new devices + scheduled daily scan for all devices
 - **Concurrent Processing**: Configurable worker pool patterns for scalable network operations
-- **State Management**: RWMutex-protected device state with timestamp-based pruning
+- **State-Centric Design**: StateManager as single source of truth for all devices
 - **InfluxDB v2**: Time-series metrics storage with point-based writes
 - **Configuration**: YAML-based config with duration parsing and environment variable support
 - **Security**: Linux capabilities (CAP_NET_RAW) for non-root ICMP access, input validation, and secure credential handling
@@ -19,14 +23,21 @@ Performs two-phase network discovery: ICMP ping sweeps followed by SNMP polling 
 
 ## Architecture
 
+The application uses a **multi-ticker architecture** with four independent, concurrent loops:
+
+1. **ICMP Discovery Ticker** - Scans networks for responsive devices
+2. **Daily SNMP Scan Ticker** - Enriches devices with SNMP data at scheduled time
+3. **Pinger Reconciliation Ticker** - Ensures all devices have active monitoring
+4. **State Pruning Ticker** - Removes devices not seen in 24 hours
+
 ```
-cmd/netscan/main.go           # Orchestration and CLI interface
+cmd/netscan/main.go           # Four-ticker orchestration and CLI interface
 internal/
-├── config/config.go          # YAML parsing with duration conversion
-├── discovery/scanner.go      # ICMP/SNMP discovery with worker pools
-├── monitoring/pinger.go      # ICMP monitoring goroutines
-├── state/manager.go          # Thread-safe device state (RWMutex)
-└── influx/writer.go          # InfluxDB client wrapper
+├── config/config.go          # YAML parsing with SNMPDailySchedule support
+├── discovery/scanner.go      # RunICMPSweep() and RunSNMPScan() functions
+├── monitoring/pinger.go      # ICMP monitoring with StateManager integration
+├── state/manager.go          # Thread-safe device state (single source of truth)
+└── influx/writer.go          # InfluxDB client wrapper with health checks
 ```
 
 ## Dependencies
@@ -145,69 +156,41 @@ SNMP_COMMUNITY=your-community           # SNMPv2c community string
 ### Configuration Structure
 
 ```yaml
-# config.yml.example - netscan network monitoring configuration
-
-# =============================================================================
-# DISCOVERY SETTINGS
-# =============================================================================
-# How often to run the full SNMP discovery scan (ICMP sweep + SNMP polling)
-discovery_interval: "4h"
-
-# How often to run ICMP discovery in --icmp-only mode
-icmp_discovery_interval: "5m"
-
-# Network ranges to scan (CIDR notation) - supports multiple subnets
+# Network Discovery
 networks:
   - "192.168.0.0/24"
   - "10.0.0.0/16"
-  - "172.16.0.0/12"
 
-# =============================================================================
-# PERFORMANCE TUNING
-# =============================================================================
-# Number of concurrent ICMP ping workers (recommended: 2-4x CPU cores)
-icmp_workers: 64
+icmp_discovery_interval: "5m"      # How often to scan for new devices
+snmp_daily_schedule: "02:00"       # Daily SNMP scan time (HH:MM)
 
-# Number of concurrent SNMP polling workers (recommended: 1-2x CPU cores)
-snmp_workers: 32
-
-# =============================================================================
-# MONITORING SETTINGS
-# =============================================================================
-# Ping frequency per monitored device
-ping_interval: "2s"
-
-# Timeout for individual ping operations
-ping_timeout: "2s"
-
-# =============================================================================
-# SNMP SETTINGS
-# =============================================================================
-# SNMPv2c community string for device authentication
+# SNMP Settings
 snmp:
-  community: "public"
+  community: "${SNMP_COMMUNITY}"   # From .env file
   port: 161
   timeout: "5s"
   retries: 1
 
-# =============================================================================
-# INFLUXDB SETTINGS
-# =============================================================================
-# Time-series database for metrics storage
+# Monitoring
+ping_interval: "2s"
+ping_timeout: "2s"
+
+# Performance
+icmp_workers: 64                   # Concurrent ICMP workers
+snmp_workers: 32                   # Concurrent SNMP workers
+
+# InfluxDB (credentials from .env file)
 influxdb:
-  url: "http://localhost:8086"
-  token: "netscan-token"
-  org: "test-org"
+  url: "${INFLUXDB_URL}"
+  token: "${INFLUXDB_TOKEN}"
+  org: "${INFLUXDB_ORG}"
   bucket: "netscan"
 
-# =============================================================================
-# RESOURCE PROTECTION SETTINGS
-# =============================================================================
-# Limits to prevent resource exhaustion and DoS attacks
-max_concurrent_pingers: 1000  # Maximum number of concurrent ping goroutines
-max_devices: 10000            # Maximum number of devices to monitor
-min_scan_interval: "1m"       # Minimum interval between discovery scans
-memory_limit_mb: 512          # Memory usage limit in MB
+# Resource Limits
+max_concurrent_pingers: 1000
+max_devices: 10000
+min_scan_interval: "1m"
+memory_limit_mb: 512
 ```
 
 ### Docker Test Environment
@@ -219,21 +202,17 @@ memory_limit_mb: 512          # Memory usage limit in MB
 
 ## Usage
 
-### Full Discovery Mode (Default)
+### Standard Mode
 
 ```bash
 ./netscan
 ```
 
-Performs ICMP sweep across configured networks, then SNMP polling of online devices.
-
-### ICMP-Only Mode
-
-```bash
-./netscan --icmp-only
-```
-
-ICMP discovery only, configurable via `icmp_discovery_interval`.
+Runs the multi-ticker architecture with:
+- ICMP discovery every 5 minutes (configurable via `icmp_discovery_interval`)
+- Daily SNMP scan at configured time (e.g., 02:00)
+- Continuous monitoring of all discovered devices
+- Automatic state pruning of stale devices
 
 ### Custom Config
 
@@ -244,7 +223,7 @@ ICMP discovery only, configurable via `icmp_discovery_interval`.
 ### Command Line Options
 
 - `-config string`: Path to configuration file (default "config.yml")
-- `-icmp-only`: Skip SNMP discovery, run ICMP-only monitoring mode
+- `-help`: Display usage information
 
 ## Deployment
 
@@ -364,107 +343,80 @@ sudo docker-compose up -d
 
 ### CI/CD Pipeline
 
-Automated testing runs on:
-- Push to main branch
-- Pull requests to main
-- Version tags (v*)
+Automated testing runs on push, pull requests, and version tags.
 
-**CI/CD Features:**
+**Features:**
 - Linux amd64 binary builds
-- Automated changelog generation (git-cliff)
+- Automated changelog generation
 - Code coverage reporting
 - Release artifact creation
+
+## Troubleshooting
+
 ### ICMP Permission Denied
 ```bash
-# Manual execution
-sudo ./netscan --icmp-only
-
-# Check capability
-getcap /usr/local/bin/netscan
+sudo ./netscan          # Manual execution
+getcap /opt/netscan/netscan  # Check capability
 ```
 
 ### InfluxDB Connection Issues
-- Verify InfluxDB running: `sudo docker ps`
-- Check config credentials
-- Validate API token permissions
+- Verify InfluxDB running: `docker ps`
+- Check config credentials and API token
+- Confirm network connectivity
 
 ### No Devices Discovered
 - Verify network ranges in config
 - Check firewall rules for ICMP/SNMP
-- Use `--icmp-only` for broader discovery
+- Confirm SNMP community string is correct
 
 ### Performance Issues
-- **Monitor Real Usage**: Use `htop` or `top` to observe actual CPU/memory consumption
-- **Start Conservative**: Begin with lower worker counts (8 ICMP, 4 SNMP) and increase gradually
-- **SNMP Bottleneck**: SNMP operations are more CPU-intensive than ICMP pings
-- **Network Latency**: High latency networks may require fewer concurrent operations
-- **Memory Growth**: Monitor for memory leaks with long-running processes
+- Start with lower worker counts (8 ICMP, 4 SNMP)
+- Monitor CPU usage with `htop` or `top`
+- Adjust based on network latency and CPU cores
 
 ## Performance Tuning
 
-- **ICMP Workers**: 64 concurrent ping operations (lightweight, network-bound)
-- **SNMP Workers**: 32 concurrent SNMP queries (CPU-intensive protocol parsing)
-- **Memory**: ~50MB baseline + ~1KB per monitored device
-- **Scaling**: Adjust worker counts based on CPU cores and network size
+**Default Configuration:**
+- ICMP Workers: 64 (lightweight, network-bound operations)
+- SNMP Workers: 32 (CPU-intensive protocol parsing)
+- Memory: ~50MB baseline + ~1KB per device
 
-#### Recommended Worker Counts by System Size
+**Recommended Worker Counts:**
 
 | System Type | CPU Cores | ICMP Workers | SNMP Workers | Max Devices |
 |-------------|-----------|--------------|--------------|-------------|
-| Raspberry Pi | 4 | 4-8 | 2-4 | 50-100 |
-| Home Server | 4-8 | 8-16 | 4-8 | 200-500 |
-| Workstation | 8-16 | 16-32 | 8-16 | 500-1000 |
-| Server | 16+ | 32-64 | 16-32 | 1000+ |
+| Raspberry Pi | 4 | 8 | 4 | 100 |
+| Home Server | 4-8 | 16 | 8 | 500 |
+| Workstation | 8-16 | 32 | 16 | 1000 |
+| Server | 16+ | 64 | 32 | 10000 |
 
-#### Default Worker Counts
-
-The default configuration (64 ICMP, 32 SNMP workers) is optimized for:
-- **High-performance servers** (16+ CPU cores)
-- **Large enterprise networks** (/16+ CIDR ranges)
-- **Low-latency networks** (<1ms average ping times)
-
-**For most systems**, start with more conservative values:
-```yaml
-icmp_workers: 8   # 2-4x CPU cores
-snmp_workers: 4   # 1-2x CPU cores
-```
-
-Monitor actual CPU usage and adjust based on your specific environment.
-
-#### Performance Characteristics (Estimated)
-
-| System Type | CPU Cores | ICMP Workers | SNMP Workers | Est. CPU % | Concurrent Ops |
-|-------------|-----------|--------------|--------------|------------|----------------|
-| Raspberry Pi 4 | 4 | 4-8 | 2-4 | 10-25% | 6-12 |
-| Home Server | 4-8 | 8-16 | 4-8 | 15-35% | 12-24 |
-| Workstation | 8-16 | 16-32 | 8-16 | 20-45% | 24-48 |
-| Enterprise Server | 16+ | 32-64 | 16-32 | 30-60% | 48-96 |
-
-#### Real-World Testing Recommendations
-
-```bash
-# Monitor actual CPU usage
-watch -n 1 "ps aux | grep netscan | grep -v grep"
-
-# Test different worker counts
-icmp_workers: 8   # Start low, monitor CPU
-snmp_workers: 4   # SNMP is more CPU intensive
-```
-
-#### Performance Factors
-
-- **ICMP Operations**: ~0.1-0.5ms CPU time per ping (mostly network wait)
-- **SNMP Operations**: ~5-50ms CPU time per query (protocol processing)
-- **Go Goroutines**: ~2-8KB memory per goroutine
-- **Channel Operations**: Minimal overhead with buffered channels
+Start with conservative values and monitor CPU usage to adjust for your environment.
 
 ## Implementation Details
 
-### Discovery Process
-1. ICMP sweep: Configurable concurrent workers ping all IPs in CIDR ranges
-2. SNMP polling: Configurable concurrent workers query online devices for MIB-II data
-3. State management: Devices tracked with last-seen timestamps
-4. Pruning: Devices removed after 2 * discovery_interval without sightings
+### Discovery Process (Multi-Ticker Architecture)
+
+The new architecture uses four independent tickers:
+
+1. **ICMP Discovery Ticker** (every `icmp_discovery_interval`, default 5m):
+   - Performs ICMP ping sweep across all configured networks
+   - Adds responsive IPs to StateManager
+   - Triggers immediate SNMP scan for newly discovered devices
+
+2. **Daily SNMP Scan Ticker** (at `snmp_daily_schedule`, e.g., 02:00):
+   - Full SNMP scan of all devices in StateManager
+   - Enriches devices with hostname and sysDescr
+   - Updates device info in InfluxDB
+
+3. **Pinger Reconciliation Ticker** (every 5 seconds):
+   - Ensures every device in StateManager has an active pinger goroutine
+   - Starts pingers for new devices
+   - Stops pingers for removed devices
+   - Maintains consistency between state and running pingers
+
+4. **State Pruning Ticker** (every 1 hour):
+   - Removes devices not seen in last 24 hours
+   - Prevents memory growth from stale devices
 
 ### Concurrency Model
 - Producer-consumer pattern with buffered channels (256 slots)
@@ -474,8 +426,13 @@ snmp_workers: 4   # SNMP is more CPU intensive
 ### Metrics Storage
 - Measurement: "ping"
 - Tags: "ip", "hostname"
-- Fields: "rtt_ms" (float), "success" (boolean), "snmp_name" (string), "snmp_description" (string), "snmp_sysid" (string)
+- Fields: "rtt_ms" (float), "success" (boolean)
 - Point-based writes with error handling
+
+- Measurement: "device_info"
+- Tags: "ip"
+- Fields: "hostname" (string), "snmp_description" (string)
+- Stored once per device or when SNMP data changes
 
 ### Security Model
 - Linux capabilities: CAP_NET_RAW for raw socket access
@@ -484,92 +441,15 @@ snmp_workers: 4   # SNMP is more CPU intensive
 
 ## Development
 
-### Development Setup
+### Setup
 
-#### Prerequisites
-- Go 1.21+ (tested with 1.25.1)
-- Git
-- InfluxDB 2.x (for testing)
-
-#### Clone Repository
 ```bash
 git clone https://github.com/extkljajicm/netscan.git
 cd netscan
 go mod download
+docker-compose up -d  # Start test InfluxDB
+go test ./...         # Run tests
 ```
-
-#### Test Environment Setup
-```bash
-# Start InfluxDB test instance
-sudo docker-compose up -d
-
-# Verify setup
-go build -o netscan ./cmd/netscan
-go test ./...
-```
-
-### Development Workflow
-
-#### Feature Development
-1. Create feature branch from main
-   ```bash
-   git checkout -b feature/new-monitoring-feature
-   ```
-
-2. Implement changes with conventional commits
-   ```bash
-   git add .
-   git commit -m "feat: add advanced ICMP timeout handling"
-   ```
-
-3. Push branch and create pull request
-   ```bash
-   git push origin feature/new-monitoring-feature
-   # Create pull request on GitHub
-   ```
-
-#### Conventional Commit Format
-```
-feat: add new monitoring feature
-fix: resolve memory leak in worker pools
-perf: optimize SNMP discovery concurrency
-docs: update configuration documentation
-test: add unit tests for config parsing
-refactor: restructure state management
-chore: update dependencies
-```
-
-#### Integration Testing
-- CI/CD pipeline triggers on push/PR
-- Runs tests with race detection
-- Builds binaries for validation
-- Reports code coverage
-- Validates configuration and deployment scripts
-
-#### Release Process
-1. Merge approved changes to main
-   ```bash
-   git checkout main
-   git pull origin main
-   ```
-
-2. Create version tag when ready for release
-   ```bash
-   git tag v1.0.0
-   git push origin main --tags
-   ```
-
-3. Automated release process:
-   - Changelog generation from conventional commits
-   - CHANGELOG.md update with new version section
-   - Linux amd64 binary build and packaging
-   - Release archive creation (.tar.gz package)
-   - GitHub release creation with attached binary
-
-#### Version Strategy
-- Alpha/Beta: v0.x.x-alpha.x, v0.x.x-beta.x
-- Stable: v1.x.x, v2.x.x
-- Patch: v1.0.1, v1.0.2
 
 ### Code Quality
 
@@ -577,6 +457,18 @@ chore: update dependencies
 go fmt ./...    # Format code
 go vet ./...    # Static analysis
 go mod tidy     # Clean dependencies
+go test -race ./...  # Race detection
+```
+
+### Conventional Commits
+
+```
+feat: add new feature
+fix: resolve bug
+perf: optimize performance
+docs: update documentation
+test: add tests
+refactor: restructure code
 ```
 
 ### Project Structure

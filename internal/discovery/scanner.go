@@ -19,6 +19,225 @@ func RunScanIPsOnly(cidr string) []string {
 	return ipsFromCIDR(cidr)
 }
 
+// RunICMPSweep performs concurrent ICMP ping sweep across multiple networks
+// Returns only the IP addresses that responded to pings
+func RunICMPSweep(networks []string, workers int) []string {
+	if workers <= 0 {
+		workers = 64 // Default
+	}
+
+	var (
+		jobs    = make(chan string, 256)
+		results = make(chan string, 256)
+		wg      sync.WaitGroup
+	)
+
+	// Worker goroutine for ICMP ping probes
+	worker := func() {
+		defer wg.Done()
+		for ip := range jobs {
+			pinger, err := probing.NewPinger(ip)
+			if err != nil {
+				continue // Skip invalid IP addresses
+			}
+			pinger.Count = 1                 // Single ping per device
+			pinger.Timeout = 1 * time.Second // 1-second discovery timeout
+			pinger.SetPrivileged(true)       // Use raw sockets for ICMP
+			if err := pinger.Run(); err != nil {
+				continue // Skip ping failures
+			}
+			stats := pinger.Statistics()
+			if stats.PacketsRecv > 0 { // Device responded to ping
+				results <- ip
+			}
+		}
+	}
+
+	// Launch concurrent ping worker goroutines
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go worker()
+	}
+
+	// Producer: enqueue all IPs from all CIDR ranges
+	go func() {
+		for _, network := range networks {
+			ips := ipsFromCIDR(network)
+			for _, ip := range ips {
+				jobs <- ip
+			}
+		}
+		close(jobs)
+	}()
+
+	// Wait for all workers to complete, then close results channel
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect all responsive IPs
+	var responsiveIPs []string
+	for ip := range results {
+		responsiveIPs = append(responsiveIPs, ip)
+	}
+	return responsiveIPs
+}
+
+// snmpGetWithFallback attempts to get SNMP OIDs using Get, falling back to GetNext if Get fails with NoSuchInstance
+func snmpGetWithFallback(params *gosnmp.GoSNMP, oids []string) (*gosnmp.SnmpPacket, error) {
+	// Try Get first (most efficient for .0 instances)
+	resp, err := params.Get(oids)
+	if err == nil {
+		// Check if we got valid responses (no NoSuchInstance errors)
+		hasValidData := false
+		for _, variable := range resp.Variables {
+			if variable.Type != gosnmp.NoSuchInstance && variable.Type != gosnmp.NoSuchObject {
+				hasValidData = true
+				break
+			}
+		}
+		if hasValidData {
+			return resp, nil
+		}
+		// All variables returned NoSuchInstance/NoSuchObject, try GetNext
+		log.Printf("Get returned NoSuchInstance for %s, trying GetNext fallback", params.Target)
+	}
+
+	// Fallback to GetNext for each OID (works when .0 instance doesn't exist)
+	// This queries the next OID in the tree, which often returns the value we want
+	baseOIDs := make([]string, len(oids))
+	for i, oid := range oids {
+		// Remove the .0 suffix if present to get base OID
+		if strings.HasSuffix(oid, ".0") {
+			baseOIDs[i] = oid[:len(oid)-2]
+		} else {
+			baseOIDs[i] = oid
+		}
+	}
+
+	variables := make([]gosnmp.SnmpPDU, 0, len(baseOIDs))
+	for _, baseOID := range baseOIDs {
+		resp, err := params.GetNext([]string{baseOID})
+		if err != nil {
+			continue
+		}
+		if len(resp.Variables) > 0 {
+			// Verify the returned OID is under the requested base OID
+			returnedOID := resp.Variables[0].Name
+			if strings.HasPrefix(returnedOID, baseOID) {
+				variables = append(variables, resp.Variables[0])
+			}
+		}
+	}
+
+	if len(variables) == 0 {
+		return nil, fmt.Errorf("no valid SNMP data retrieved")
+	}
+
+	// Construct a response packet with the collected variables
+	return &gosnmp.SnmpPacket{
+		Variables: variables,
+	}, nil
+}
+
+// RunSNMPScan performs concurrent SNMP queries on a list of IP addresses
+// Returns devices with SNMP data populated, gracefully handles SNMP failures
+func RunSNMPScan(ips []string, snmpConfig *config.SNMPConfig, workers int) []state.Device {
+	if workers <= 0 {
+		workers = 32 // Default
+	}
+
+	var (
+		jobs    = make(chan string, 256)
+		results = make(chan state.Device, 256)
+		wg      sync.WaitGroup
+	)
+
+	// Worker goroutine for SNMP queries
+	worker := func() {
+		defer wg.Done()
+		for ip := range jobs {
+			// Configure SNMP connection parameters
+			params := &gosnmp.GoSNMP{
+				Target:    ip,
+				Port:      uint16(snmpConfig.Port),
+				Community: snmpConfig.Community,
+				Version:   gosnmp.Version2c,
+				Timeout:   snmpConfig.Timeout,
+				Retries:   snmpConfig.Retries,
+			}
+			if err := params.Connect(); err != nil {
+				// SNMP failed, skip this device
+				log.Printf("SNMP connection failed for %s: %v", ip, err)
+				continue
+			}
+			// Query standard MIB-II system OIDs: sysName, sysDescr, sysObjectID
+			oids := []string{"1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.2.0"}
+			resp, err := snmpGetWithFallback(params, oids)
+			params.Conn.Close()
+			if err != nil || len(resp.Variables) < 3 {
+				// SNMP query failed, skip this device
+				log.Printf("SNMP query failed for %s: %v", ip, err)
+				continue
+			}
+
+			// Validate and sanitize SNMP response data
+			hostname, err := validateSNMPString(resp.Variables[0].Value, "sysName")
+			if err != nil {
+				log.Printf("Invalid sysName for %s: %v", ip, err)
+				continue
+			}
+			sysDescr, err := validateSNMPString(resp.Variables[1].Value, "sysDescr")
+			if err != nil {
+				log.Printf("Invalid sysDescr for %s: %v", ip, err)
+				continue
+			}
+			sysObjectID, err := validateSNMPString(resp.Variables[2].Value, "sysObjectID")
+			if err != nil {
+				log.Printf("Invalid sysObjectID for %s: %v", ip, err)
+				continue
+			}
+
+			dev := state.Device{
+				IP:          ip,
+				Hostname:    hostname,
+				SysDescr:    sysDescr,
+				SysObjectID: sysObjectID,
+				LastSeen:    time.Now(),
+			}
+			results <- dev
+		}
+	}
+
+	// Launch concurrent SNMP worker goroutines
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go worker()
+	}
+
+	// Producer: enqueue all IPs
+	go func() {
+		for _, ip := range ips {
+			jobs <- ip
+		}
+		close(jobs)
+	}()
+
+	// Wait for all workers to complete, then close results channel
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect all discovered devices
+	var devices []state.Device
+	for dev := range results {
+		devices = append(devices, dev)
+	}
+	return devices
+}
+
 // RunScan performs concurrent SNMPv2c discovery across configured networks
 func RunScan(cfg *config.Config) []state.Device {
 	var (
@@ -45,7 +264,7 @@ func RunScan(cfg *config.Config) []state.Device {
 			}
 			// Query standard MIB-II system OIDs: sysName, sysDescr, sysObjectID
 			oids := []string{"1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.2.0"}
-			resp, err := params.Get(oids)
+			resp, err := snmpGetWithFallback(params, oids)
 			params.Conn.Close()
 			if err != nil || len(resp.Variables) < 3 {
 				continue // Skip devices with incomplete SNMP responses
@@ -215,7 +434,7 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 			}
 			// Query standard MIB-II system OIDs: sysName, sysDescr, sysObjectID
 			oids := []string{"1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.2.0"}
-			resp, err := params.Get(oids)
+			resp, err := snmpGetWithFallback(params, oids)
 			params.Conn.Close()
 			if err != nil || len(resp.Variables) < 3 {
 				// SNMP query failed, but device is online
@@ -387,9 +606,18 @@ func incIP(ip net.IP) {
 
 // validateSNMPString validates and sanitizes SNMP response string values
 func validateSNMPString(value interface{}, oidName string) (string, error) {
-	str, ok := value.(string)
-	if !ok {
-		return "", fmt.Errorf("invalid type for %s: expected string, got %T", oidName, value)
+	var str string
+	
+	// Handle different types that SNMP can return for string values
+	switch v := value.(type) {
+	case string:
+		str = v
+	case []byte:
+		// SNMP OctetString values are often returned as byte arrays
+		// Note: []byte and []uint8 are the same type in Go
+		str = string(v)
+	default:
+		return "", fmt.Errorf("invalid type for %s: expected string or []byte, got %T", oidName, value)
 	}
 
 	// Check for null bytes and other control characters that could be dangerous
