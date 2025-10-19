@@ -15,7 +15,7 @@ A multi-stage Docker build configuration that:
   - Builds a static binary with optimizations for linux/amd64
 - **Stage 2 (Runtime)**: Uses `alpine:latest` for minimal image size
   - Installs runtime dependencies (ca-certificates, libcap)
-  - Creates non-root user `netscan` for security
+  - **Runs as root user** (required for ICMP raw socket access in containers)
   - Sets `CAP_NET_RAW` capability for ICMP ping access
   - Configures proper ownership and permissions
   - Exposes config path via environment variable
@@ -23,8 +23,8 @@ A multi-stage Docker build configuration that:
 **Key Features**:
 - Multi-stage build reduces final image size
 - Linux/amd64 architecture support
-- Non-root user execution for security
-- Linux capabilities instead of full root access
+- **Root user execution** (necessary for ICMP raw sockets - see Security Considerations)
+- Linux capabilities (CAP_NET_RAW) for ping functionality
 - Optimized layer caching for faster builds
 
 ### 2. .dockerignore
@@ -134,12 +134,37 @@ docker build -t netscan:local .
 
 ## Security Considerations
 
-1. **Non-root Execution**: Container runs as `netscan` user (not root)
-2. **Linux Capabilities**: Only `CAP_NET_RAW` granted (for ICMP ping)
-3. **Read-only Config**: Config file mounted as read-only
-4. **Environment Variables**: Sensitive credentials passed via env vars
-5. **Image Provenance**: Build attestation for supply chain security
-6. **Minimal Base Image**: Alpine Linux for reduced attack surface
+### Docker Deployment Security Model
+
+**Root User Requirement (ICMP Limitation)**:
+
+The Docker container runs as **root user**, which is necessary for ICMP raw socket access. This is a Linux kernel security limitation in containerized environments.
+
+**Why Root is Required**:
+1. **Raw Socket Restriction**: Linux kernel prevents non-root users from creating raw ICMP sockets in containers
+2. **CAP_NET_RAW Insufficient**: Even with `CAP_NET_RAW` capability, non-root users cannot create raw sockets in Docker
+3. **setcap Ineffective**: File capabilities (`setcap cap_net_raw+ep`) don't work for non-root users in containers
+4. **Containerization Limitation**: This is specific to containerized environments; native deployments can use non-root + setcap
+
+**Security Measures Despite Root User**:
+1. **Container Isolation**: Docker namespace isolation prevents container root from affecting host
+2. **Minimal Capabilities**: Only `CAP_NET_RAW` granted (not full privileged mode)
+3. **Read-only Config**: Config file mounted as read-only (`:ro`)
+4. **Environment Variables**: Sensitive credentials passed via env vars (not hardcoded)
+5. **Minimal Base Image**: Alpine Linux (~15MB) reduces attack surface
+6. **No Privileged Flag**: Container does NOT use `--privileged` (excessive permissions)
+
+**Comparison: Docker vs Native**:
+
+| Aspect | Docker Deployment | Native Deployment |
+|--------|------------------|-------------------|
+| User | root (required) | netscan (dedicated service user) |
+| Isolation | Docker namespaces | System user + systemd |
+| ICMP Access | Root permissions | CAP_NET_RAW via setcap |
+| Shell | /bin/sh (limited) | /bin/false (no shell) |
+| Recommendation | Acceptable for network monitoring | Preferred for security |
+
+**Note**: For maximum security, use native deployment (see README_NATIVE.md) which runs as non-root `netscan` service user with setcap.
 
 ## CI/CD Integration
 

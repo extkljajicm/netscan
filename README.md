@@ -20,7 +20,7 @@ Performs decoupled network discovery and monitoring with four independent ticker
 - **State-Centric Design**: StateManager as single source of truth for all devices
 - **InfluxDB v2**: Time-series metrics storage with point-based writes
 - **Docker Deployment**: Complete stack with Docker Compose
-- **Security**: Linux capabilities (CAP_NET_RAW) for non-root ICMP access, input validation, and secure credential handling
+- **Security**: Linux capabilities (CAP_NET_RAW) for ICMP access, input validation, and secure credential handling
 
 ## Architecture
 
@@ -499,9 +499,21 @@ The new architecture uses four independent tickers:
 - Stored once per device or when SNMP data changes
 
 ### Security Model
-- Linux capabilities: CAP_NET_RAW for raw socket access (provided by Docker)
-- Dedicated service user: Non-root execution in container
-- Docker security: Minimal Alpine base image, non-root user, minimal capabilities
+
+**Docker Deployment** (this PR):
+- **Runs as root user**: Required for ICMP raw socket access in containerized environments
+- **Why root is necessary**: Linux kernel security restrictions prevent non-root users from creating raw ICMP sockets in containers, even with CAP_NET_RAW capability
+- **Isolation maintained**: Container remains isolated from host through Docker's namespace isolation
+- **Minimal attack surface**: Alpine base image (~15MB), only CAP_NET_RAW capability (not full privileged mode)
+- **Read-only config**: Configuration file mounted read-only (`:ro`)
+- **Security trade-off**: Root access required for ping functionality, but container isolation provides security boundary
+
+**Native Deployment** (see [README_NATIVE.md](README_NATIVE.md)):
+- **Runs as dedicated service user**: Non-root `netscan` user created by deploy.sh
+- **No shell access**: Service user has `/bin/false` as shell for security
+- **CAP_NET_RAW via setcap**: Binary gets capability via setcap, no root required
+- **Systemd isolation**: Service runs as User=netscan with additional restrictions
+- **Preferred for security**: Non-root execution without containerization limitations
 
 ## Development
 

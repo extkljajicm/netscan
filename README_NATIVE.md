@@ -67,6 +67,14 @@ Edit `config.yml` with your network settings.
 
 ### Security Features
 
+**Native Deployment Advantages (vs Docker)**:
+- **Non-root execution**: Runs as dedicated `netscan` service user (not root)
+- **No shell access**: Service user has `/bin/false` as shell for security
+- **CAP_NET_RAW via setcap**: Binary gets capability via setcap, no root required
+- **Systemd isolation**: Additional security restrictions via systemd settings
+- **Preferred security model**: Avoids Docker containerization limitations that require root
+
+**General Security Features**:
 - **Environment Variables**: Sensitive values (tokens, passwords) can use environment variables with `${VAR_NAME}` syntax
 - **Secure .env File**: Deployment creates a separate `.env` file with restrictive permissions (600) for sensitive credentials
 - **Input Validation**: Configuration is validated at startup for security and sanity
