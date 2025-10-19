@@ -2,6 +2,8 @@
 
 Network monitoring service written in Go that performs ICMP ping monitoring of discovered devices and stores metrics in InfluxDB.
 
+> **📝 Note:** This README focuses on Docker deployment. For native installation (systemd, manual builds), see [README_NATIVE.md](README_NATIVE.md).
+
 ## Overview
 
 Performs decoupled network discovery and monitoring with four independent tickers: ICMP discovery finds new devices, scheduled SNMP scans enrich device data, pinger reconciliation ensures continuous monitoring, and state pruning removes stale devices. This architecture provides efficient resource usage and fast response to network changes.
@@ -17,9 +19,8 @@ Performs decoupled network discovery and monitoring with four independent ticker
 - **Concurrent Processing**: Configurable worker pool patterns for scalable network operations
 - **State-Centric Design**: StateManager as single source of truth for all devices
 - **InfluxDB v2**: Time-series metrics storage with point-based writes
-- **Configuration**: YAML-based config with duration parsing and environment variable support
+- **Docker Deployment**: Complete stack with Docker Compose
 - **Security**: Linux capabilities (CAP_NET_RAW) for non-root ICMP access, input validation, and secure credential handling
-- **Single Binary**: No runtime dependencies
 
 ## Architecture
 
@@ -40,14 +41,7 @@ internal/
 └── influx/writer.go          # InfluxDB client wrapper with health checks
 ```
 
-## Dependencies
-
-- `github.com/gosnmp/gosnmp v1.42.1` - SNMPv2c protocol
-- `github.com/influxdata/influxdb-client-go/v2 v2.14.0` - InfluxDB v2 client
-- `github.com/prometheus-community/pro-bing v0.7.0` - ICMP ping library
-- `gopkg.in/yaml.v3 v3.0.1` - YAML configuration parser
-
-## Quick Start with Docker (Recommended)
+## Quick Start with Docker
 
 The easiest way to get netscan running is with Docker Compose, which sets up both netscan and InfluxDB automatically.
 
@@ -179,88 +173,21 @@ influxdb:
   bucket: "netscan"
 ```
 
-## Installation
-
-### Prerequisites
-- Go 1.21+ (tested with 1.25.1)
-- InfluxDB 2.x
-- Root privileges for ICMP socket access
-
-### Ubuntu
-```bash
-sudo apt update
-sudo apt install golang-go docker.io docker-compose
-sudo systemctl enable docker
-sudo systemctl start docker
-```
-
-### CachyOS
-```bash
-sudo pacman -S go docker docker-compose
-sudo systemctl enable docker
-sudo systemctl start docker
-```
-
-### Setup for Native Build
-```bash
-git clone https://github.com/extkljajicm/netscan.git
-cd netscan
-go mod download
-```
-
 ## Configuration
 
-Copy and edit configuration:
+### For Docker Deployment
+
+The configuration is handled through `config.yml`. Copy and edit the template:
 
 ```bash
 cp config.yml.example config.yml
 ```
 
-### Security Features
-
-- **Environment Variables**: Sensitive values (tokens, passwords) can use environment variables with `${VAR_NAME}` syntax
-- **Secure .env File**: Deployment creates a separate `.env` file with restrictive permissions (600) for sensitive credentials
-- **Input Validation**: Configuration is validated at startup for security and sanity
-- **Network Range Validation**: Prevents scanning dangerous networks (loopback, multicast, link-local, overly broad ranges)
-- **Runtime Validation**: SNMP responses, IP addresses, and database writes are validated and sanitized
-- **SNMP Security**: Community string validation with weak password detection
-- **Resource Protection**: Configurable limits prevent DoS attacks and resource exhaustion
-  - Rate limiting for discovery scans and database writes
-  - Memory usage monitoring with configurable limits
-  - Concurrent operation bounds to prevent goroutine exhaustion
-  - Device count limits with automatic cleanup
-
-### Environment Variables
-
-Sensitive configuration values are loaded from a `.env` file created during deployment:
-
-```bash
-# .env file (created by deploy.sh with 600 permissions)
-INFLUXDB_URL=http://localhost:8086      # InfluxDB server URL
-INFLUXDB_TOKEN=netscan-token            # InfluxDB API token
-INFLUXDB_ORG=test-org                   # InfluxDB organization
-INFLUXDB_BUCKET=netscan                 # InfluxDB bucket name
-SNMP_COMMUNITY=your-community           # SNMPv2c community string
-```
-
-**Supported Environment Variables:**
-- `INFLUXDB_URL`: InfluxDB server endpoint
-- `INFLUXDB_TOKEN`: API token for authentication
-- `INFLUXDB_ORG`: Organization name
-- `INFLUXDB_BUCKET`: Target bucket for metrics
-- `SNMP_COMMUNITY`: SNMPv2c community string for device access
-
-**Security Best Practices:**
-- Never commit `.env` files to version control
-- Set restrictive permissions: `chmod 600 .env`
-- Rotate credentials regularly
-- Use strong, unique tokens for each environment
-
-**For Production:**
-- Generate unique, strong tokens for InfluxDB
-- Use different organizations per environment
-- Change SNMP community strings from defaults
-- Consider using a secret management system
+Edit the following key settings:
+- `networks`: Your network ranges (e.g., `192.168.1.0/24`)
+- `influxdb.token`: `netscan-token` (matches docker-compose default)
+- `influxdb.org`: `test-org` (matches docker-compose default)
+- `snmp.community`: `public` (default SNMP community string)
 
 ### Configuration Structure
 
@@ -302,101 +229,15 @@ min_scan_interval: "1m"
 memory_limit_mb: 512
 ```
 
-### Docker Test Environment
+### Docker Environment
 
-`docker-compose.yml` provides InfluxDB v2.7 with:
+The `docker-compose.yml` provides a complete stack with:
+- InfluxDB v2.7 for metrics storage
 - Organization: `test-org`
 - Bucket: `netscan`
 - Token: `netscan-token`
 
-## Usage
-
-### Standard Mode
-
-```bash
-./netscan
-```
-
-Runs the multi-ticker architecture with:
-- ICMP discovery every 5 minutes (configurable via `icmp_discovery_interval`)
-- Daily SNMP scan at configured time (e.g., 02:00)
-- Continuous monitoring of all discovered devices
-- Automatic state pruning of stale devices
-
-### Custom Config
-
-```bash
-./netscan -config /path/to/config.yml
-```
-
-### Command Line Options
-
-- `-config string`: Path to configuration file (default "config.yml")
-- `-help`: Display usage information
-
-## Deployment Options
-
-### Option 1: Docker Compose (Recommended)
-
-See the [Quick Start with Docker](#quick-start-with-docker-recommended) section above for complete instructions.
-
-### Option 2: Native Installation with Systemd
-
-#### Automated Deployment
-
-```bash
-sudo ./deploy.sh
-```
-
-Creates:
-- `/opt/netscan/` with binary, config, and secure `.env` file
-- `netscan` user with minimal privileges
-- `CAP_NET_RAW` capability on binary
-- Systemd service with network-compatible security settings
-- Secure credential management via environment variables
-
-#### Manual Deployment
-
-```bash
-go build -o netscan ./cmd/netscan
-sudo mkdir -p /opt/netscan
-sudo cp netscan /opt/netscan/
-sudo cp config.yml /opt/netscan/
-sudo setcap cap_net_raw+ep /opt/netscan/netscan
-sudo useradd -r -s /bin/false netscan
-sudo chown -R netscan:netscan /opt/netscan
-
-sudo tee /etc/systemd/system/netscan.service > /dev/null <<EOF
-[Unit]
-Description=netscan network monitoring
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/opt/netscan/netscan
-WorkingDirectory=/opt/netscan
-Restart=always
-User=netscan
-Group=netscan
-
-# Security settings (relaxed for network access)
-NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
-AmbientCapabilities=CAP_NET_RAW
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable netscan
-sudo systemctl start netscan
-```
-
 ## Service Management
-
-### Docker Compose
 
 ```bash
 # View all services status
@@ -422,109 +263,17 @@ docker compose down -v
 docker compose up -d --build
 ```
 
-### Systemd (Native Installation)
-
-```bash
-# Check service status
-sudo systemctl status netscan
-
-# View logs
-sudo journalctl -u netscan -f
-
-# Restart service
-sudo systemctl restart netscan
-
-# Stop service
-sudo systemctl stop netscan
-
-# Start service
-sudo systemctl start netscan
-```
-
 ## Building
 
-### Docker Image
-
-The Docker image is built locally using the Dockerfile when you run `docker compose up`.
+The Docker image is built automatically when you run `docker compose up`. To build manually:
 
 ```bash
-# Build the image manually
+# Build the image with docker compose
 docker compose build
 
 # Or build with docker directly
 docker build -t netscan:local .
 ```
-
-### Native Binary
-
-#### Automated Build
-
-```bash
-./build.sh
-```
-
-Builds the netscan binary with optimized settings.
-
-#### Manual Build
-
-```bash
-go build -o netscan ./cmd/netscan
-```
-
-#### Cross-Platform Builds
-
-**Docker Images:**
-- Linux (amd64) - Built locally via Dockerfile
-
-**Native Binaries (via CI/CD):**
-- Linux (amd64)
-
-For custom platform builds, use Go's cross-compilation:
-```bash
-GOOS=linux GOARCH=arm64 go build -o netscan-arm64 ./cmd/netscan
-GOOS=darwin GOARCH=amd64 go build -o netscan-macos ./cmd/netscan
-```
-
-## Testing
-
-### Unit Tests
-
-```bash
-go test ./...                    # All tests
-go test -v ./...                 # Verbose output
-go test ./internal/config        # Specific package
-go test -race ./...              # Race detection
-go test -cover ./...             # Coverage report
-```
-
-**Test Coverage:**
-- Configuration parsing and validation
-- Network discovery algorithms
-- State management concurrency
-- InfluxDB client operations
-- ICMP ping monitoring
-- SNMP polling functionality
-
-### Integration Testing
-
-```bash
-# Start test environment with Docker Compose
-docker compose up -d
-
-# View logs to verify it's working
-docker compose logs -f netscan
-```
-
-### CI/CD Pipeline
-
-Automated testing runs on push, pull requests, and version tags.
-
-**Features:**
-- Docker Compose stack validation
-- Linux amd64 binary builds
-- Automated changelog generation
-- Code coverage reporting
-- Release artifact creation
 
 ## Troubleshooting
 
@@ -562,19 +311,6 @@ docker inspect netscan | grep NetworkMode
 # Check CAP_NET_RAW capability
 docker inspect netscan | grep -A 5 CapAdd
 ```
-
-### Native Installation Issues
-
-**ICMP Permission Denied:**
-```bash
-sudo ./netscan          # Manual execution
-getcap /opt/netscan/netscan  # Check capability
-```
-
-**InfluxDB Connection Issues:**
-- Verify InfluxDB running: `systemctl status influxdb` or `docker ps`
-- Check config credentials and API token
-- Confirm network connectivity
 
 ### General Issues
 
@@ -650,20 +386,27 @@ The new architecture uses four independent tickers:
 - Stored once per device or when SNMP data changes
 
 ### Security Model
-- Linux capabilities: CAP_NET_RAW for raw socket access
-- Dedicated service user: Non-root execution
-- Systemd hardening: NoNewPrivileges, PrivateTmp, ProtectSystem with AmbientCapabilities for network access
+- Linux capabilities: CAP_NET_RAW for raw socket access (provided by Docker)
+- Dedicated service user: Non-root execution in container
+- Docker security: Minimal Alpine base image, non-root user, minimal capabilities
 
 ## Development
 
-### Setup
+### Local Development with Docker
 
 ```bash
 git clone https://github.com/extkljajicm/netscan.git
 cd netscan
-go mod download
-docker-compose up -d  # Start test InfluxDB
-go test ./...         # Run tests
+
+# Start InfluxDB for testing
+docker compose up -d influxdb
+
+# Run tests
+go test ./...
+go test -race ./...  # Race detection
+
+# Build and run with changes
+docker compose up -d --build
 ```
 
 ### Code Quality
@@ -672,18 +415,6 @@ go test ./...         # Run tests
 go fmt ./...    # Format code
 go vet ./...    # Static analysis
 go mod tidy     # Clean dependencies
-go test -race ./...  # Race detection
-```
-
-### Conventional Commits
-
-```
-feat: add new feature
-fix: resolve bug
-perf: optimize performance
-docs: update documentation
-test: add tests
-refactor: restructure code
 ```
 
 ### Project Structure
