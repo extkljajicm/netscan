@@ -79,21 +79,29 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	// Parse string durations to time.Duration
-	discoveryInterval, err := time.ParseDuration(raw.DiscoveryInterval)
-	if err != nil {
-		return nil, err
+	// discovery_interval is optional for backward compatibility (deprecated in new architecture)
+	var discoveryInterval time.Duration
+	if raw.DiscoveryInterval != "" {
+		discoveryInterval, err = time.ParseDuration(raw.DiscoveryInterval)
+		if err != nil {
+			return nil, fmt.Errorf("invalid discovery_interval: %v", err)
+		}
+	} else {
+		// Default to 4h if not specified (backward compatibility)
+		discoveryInterval = 4 * time.Hour
 	}
+	
 	icmpDiscoveryInterval, err := time.ParseDuration(raw.IcmpDiscoveryInterval)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid icmp_discovery_interval: %v", err)
 	}
 	pingInterval, err := time.ParseDuration(raw.PingInterval)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid ping_interval: %v", err)
 	}
 	pingTimeout, err := time.ParseDuration(raw.PingTimeout)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid ping_timeout: %v", err)
 	}
 
 	// Parse MinScanInterval if specified
@@ -101,7 +109,7 @@ func LoadConfig(path string) (*Config, error) {
 	if raw.MinScanInterval != "" {
 		minScanInterval, err = time.ParseDuration(raw.MinScanInterval)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("invalid min_scan_interval: %v", err)
 		}
 	}
 
