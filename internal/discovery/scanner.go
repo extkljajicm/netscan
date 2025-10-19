@@ -84,6 +84,63 @@ func RunICMPSweep(networks []string, workers int) []string {
 	return responsiveIPs
 }
 
+// snmpGetWithFallback attempts to get SNMP OIDs using Get, falling back to GetNext if Get fails with NoSuchInstance
+func snmpGetWithFallback(params *gosnmp.GoSNMP, oids []string) (*gosnmp.SnmpPacket, error) {
+	// Try Get first (most efficient for .0 instances)
+	resp, err := params.Get(oids)
+	if err == nil {
+		// Check if we got valid responses (no NoSuchInstance errors)
+		hasValidData := false
+		for _, variable := range resp.Variables {
+			if variable.Type != gosnmp.NoSuchInstance && variable.Type != gosnmp.NoSuchObject {
+				hasValidData = true
+				break
+			}
+		}
+		if hasValidData {
+			return resp, nil
+		}
+		// All variables returned NoSuchInstance/NoSuchObject, try GetNext
+		log.Printf("Get returned NoSuchInstance for %s, trying GetNext fallback", params.Target)
+	}
+
+	// Fallback to GetNext for each OID (works when .0 instance doesn't exist)
+	// This queries the next OID in the tree, which often returns the value we want
+	baseOIDs := make([]string, len(oids))
+	for i, oid := range oids {
+		// Remove the .0 suffix if present to get base OID
+		if strings.HasSuffix(oid, ".0") {
+			baseOIDs[i] = oid[:len(oid)-2]
+		} else {
+			baseOIDs[i] = oid
+		}
+	}
+
+	variables := make([]gosnmp.SnmpPDU, 0, len(baseOIDs))
+	for _, baseOID := range baseOIDs {
+		resp, err := params.GetNext([]string{baseOID})
+		if err != nil {
+			continue
+		}
+		if len(resp.Variables) > 0 {
+			// Verify the returned OID is under the requested base OID
+			returnedOID := resp.Variables[0].Name
+			if strings.HasPrefix(returnedOID, baseOID) {
+				variables = append(variables, resp.Variables[0])
+			}
+		}
+	}
+
+	if len(variables) == 0 {
+		return nil, fmt.Errorf("no valid SNMP data retrieved")
+	}
+
+	// Construct a response packet with the collected variables
+	return &gosnmp.SnmpPacket{
+		Variables: variables,
+	}, nil
+}
+
 // RunSNMPScan performs concurrent SNMP queries on a list of IP addresses
 // Returns devices with SNMP data populated, gracefully handles SNMP failures
 func RunSNMPScan(ips []string, snmpConfig *config.SNMPConfig, workers int) []state.Device {
@@ -117,7 +174,7 @@ func RunSNMPScan(ips []string, snmpConfig *config.SNMPConfig, workers int) []sta
 			}
 			// Query standard MIB-II system OIDs: sysName, sysDescr, sysObjectID
 			oids := []string{"1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.2.0"}
-			resp, err := params.Get(oids)
+			resp, err := snmpGetWithFallback(params, oids)
 			params.Conn.Close()
 			if err != nil || len(resp.Variables) < 3 {
 				// SNMP query failed, skip this device
@@ -207,7 +264,7 @@ func RunScan(cfg *config.Config) []state.Device {
 			}
 			// Query standard MIB-II system OIDs: sysName, sysDescr, sysObjectID
 			oids := []string{"1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.2.0"}
-			resp, err := params.Get(oids)
+			resp, err := snmpGetWithFallback(params, oids)
 			params.Conn.Close()
 			if err != nil || len(resp.Variables) < 3 {
 				continue // Skip devices with incomplete SNMP responses
@@ -377,7 +434,7 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 			}
 			// Query standard MIB-II system OIDs: sysName, sysDescr, sysObjectID
 			oids := []string{"1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.2.0"}
-			resp, err := params.Get(oids)
+			resp, err := snmpGetWithFallback(params, oids)
 			params.Conn.Close()
 			if err != nil || len(resp.Variables) < 3 {
 				// SNMP query failed, but device is online
