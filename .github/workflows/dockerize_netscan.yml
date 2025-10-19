@@ -22,6 +22,7 @@ jobs:
         # Replace environment variables with actual values that match docker-compose.yml
         sed -i 's|\${INFLUXDB_TOKEN}|netscan-token|g' config.yml
         sed -i 's|\${INFLUXDB_ORG}|test-org|g' config.yml
+        sed -i 's|\${SNMP_COMMUNITY}|public|g' config.yml
         echo "Config file created and configured with test credentials"
 
     - name: Build and start Docker Compose stack

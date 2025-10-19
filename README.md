@@ -77,11 +77,13 @@ The easiest way to get netscan running is with Docker Compose, which sets up bot
    - `networks`: Add your network ranges (e.g., `192.168.1.0/24`)
    - `influxdb.token`: Set to `netscan-token` (matches docker-compose default)
    - `influxdb.org`: Set to `test-org` (matches docker-compose default)
+   - `snmp.community`: Set to `public` (default SNMP community string)
    
    For testing, you can use sed to quickly replace the placeholders:
    ```bash
    sed -i 's|\${INFLUXDB_TOKEN}|netscan-token|g' config.yml
    sed -i 's|\${INFLUXDB_ORG}|test-org|g' config.yml
+   sed -i 's|\${SNMP_COMMUNITY}|public|g' config.yml
    ```
 
 3. **Start the stack**
