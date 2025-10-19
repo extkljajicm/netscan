@@ -1,8 +1,8 @@
-# GitHub Copilot Instructions for Project: netscan (Refined)
+# GitHub Copilot Instructions for Project: netscan
 
 ## Project Goal
 
-To refactor and enhance `netscan`, a Go-based network monitoring service, to be highly performant, resilient, and secure. The service must follow a specific, decoupled workflow:
+`netscan` is a Go-based network monitoring service with a decoupled, multi-ticker architecture. The service follows this workflow:
 
 1.  **Periodic ICMP Discovery:** Scan configured network ranges to find new, active devices.
 2.  **Continuous ICMP Monitoring:** For *every* device found, initiate an immediate and continuous high-frequency (e.g., 1-second) ICMP ping to track real-time uptime.
@@ -13,23 +13,88 @@ To refactor and enhance `netscan`, a Go-based network monitoring service, to be 
 
 ---
 
-## Core Features to Refine
+## Core Features (Implemented)
 
 * **Configuration:** Load parameters from `config.yml` with full environment variable support.
-    * `icmp_discovery_interval`: How often to scan for *new* devices (e.g., "4h").
+    * `icmp_discovery_interval`: How often to scan for *new* devices (e.g., "5m").
     * `ping_interval`: How often to ping *known* devices (e.g., "1s").
     * `snmp_daily_schedule`: What time to run the full SNMP scan (e.g., "02:00").
-* **State Management:** A thread-safe, in-memory registry (`StateManager`) is the "single source of truth" for all known devices. It must support adding new devices, updating/enriching existing ones, and pruning stale devices that haven't responded to pings.
+    * `discovery_interval`: Optional for backward compatibility (defaults to 4h if omitted).
+* **State Management:** A thread-safe, in-memory registry (`StateManager`) is the "single source of truth" for all known devices. It supports adding new devices, updating/enriching existing ones, and pruning stale devices that haven't responded to pings.
 * **Decoupled ICMP Discovery:** A dedicated scanner that runs on `icmp_discovery_interval`, sweeps network ranges, and feeds *new* IPs to the `StateManager`.
 * **Decoupled SNMP Scanning:** A dedicated, concurrent scanner that can be triggered in two ways:
     1.  On-demand (for a single, newly-discovered IP).
     2.  Scheduled (for *all* IPs currently in the `StateManager`).
-* **Continuous Monitoring:** A "reconciliation loop" that ensures *every* device in the `StateManager` has a dedicated, continuous `pinger` goroutine running. This loop must also handle device removal, gracefully stopping the associated goroutine.
+* **Continuous Monitoring:** A "reconciliation loop" that ensures *every* device in the `StateManager` has a dedicated, continuous `pinger` goroutine running. This loop also handles device removal, gracefully stopping the associated goroutine.
 * **Resilience & Security (Mandatory):**
-    * **Retain All Fixes:** Fully integrate all solutions from `SECURITY_IMPROVEMENTS.md`.
-    * **Timeouts:** Apply aggressive `context.WithTimeout` to *all* external calls: ICMP ping, SNMP queries, and InfluxDB writes.
-    * **InfluxDB Protection:** Mandate the InfluxDB **health check** on startup, **rate limiting** on writes, and **strict data sanitization/validation** before every write.
-    * **Error Handling:** A failed ping or SNMP query must be logged but must *not* crash the pinger or the application.
+    * **All Fixes Integrated:** All solutions from `SECURITY_IMPROVEMENTS.md` are implemented.
+    * **Timeouts:** Aggressive `context.WithTimeout` applied to *all* external calls: ICMP ping, SNMP queries, and InfluxDB writes.
+    * **InfluxDB Protection:** InfluxDB **health check** on startup, **rate limiting** on writes, and **strict data sanitization/validation** before every write.
+    * **Error Handling:** A failed ping or SNMP query is logged but does *not* crash the pinger or the application.
+
+---
+
+## Lessons Learned from Production Implementation
+
+### SNMP Best Practices
+
+**Always use fallback mechanisms:**
+* SNMP Get can fail with NoSuchInstance errors on devices that support SNMP but don't have .0 OID instances
+* Implement `snmpGetWithFallback()`: Try Get first (efficient), fall back to GetNext if needed
+* Validate OID prefixes when using GetNext to ensure results are under the requested base OID
+
+**Handle diverse data types:**
+* gosnmp library returns OctetString values as `[]byte`, not `string`
+* Always check for both `string` and `[]byte` types when processing SNMP responses
+* Convert byte arrays to strings using `string(v)` for ASCII/UTF-8 encoded values
+
+### Configuration Best Practices
+
+**Maintain backward compatibility:**
+* Make new fields optional with sensible defaults
+* Don't break existing configs when adding new features
+* Provide clear error messages for invalid configurations
+
+**Keep config files clean:**
+* Remove deprecated fields from example configs
+* Reorganize for clarity when adding new features
+* Document all required vs optional fields
+
+### InfluxDB Schema Best Practices
+
+**Keep it simple:**
+* Remove redundant fields (e.g., don't store hostname twice as hostname and snmp_name)
+* Remove fields that aren't used for monitoring or queries (e.g., sysObjectID)
+* Simplified schema: device_info measurement with only IP, hostname, and snmp_description
+
+**Write confirmation:**
+* Log each successful write to InfluxDB for debugging
+* Include device identifier in logs (IP and hostname)
+* Makes it immediately clear when data is/isn't being persisted
+
+### Logging Best Practices
+
+**Be specific about counts:**
+* Show both success and failure counts: `"enriched X devices (failed: Y)"`
+* Log each operation result individually for debugging
+* Provide summary logs after operations complete
+
+**Make failures obvious:**
+* Log when SNMP fails for new devices
+* Indicate that failed devices will be retried in next scan
+* Don't hide errors but also don't spam logs
+
+### Documentation Best Practices
+
+**Focus on current features:**
+* Remove verbose iterative fix details from CHANGELOG
+* Keep README concise and focused on capabilities
+* Document what the software does, not the development process
+
+**Maintain consistency:**
+* Update all docs when making schema or config changes
+* Keep README, CHANGELOG, and code comments in sync
+* Remove references to deprecated features everywhere
 
 ---
 
@@ -45,120 +110,178 @@ To refactor and enhance `netscan`, a Go-based network monitoring service, to be 
 
 ---
 
-## Refined Architecture & Implementation Plan
+## Testing & Validation Approach
 
-### Step 1: Configuration (`internal/config/config.go`)
+### Build & Test
+* Run `go build ./cmd/netscan` frequently during development
+* Run `go test ./...` to validate all tests pass
+* Run `go test -race ./...` to detect race conditions
+* All tests must pass before committing changes
 
-1.  **Review `Config` Struct:** Ensure it includes:
-    * `ICMPDiscoveryInterval time.Duration` (e.g., "4h")
+### Manual Validation
+* Test with actual config files to verify config loading
+* Test with diverse SNMP devices to verify compatibility
+* Monitor logs to ensure operations are working correctly
+* Verify InfluxDB writes by querying the database
+
+### CI/CD Requirements
+* `./netscan --help` must work (flag support required)
+* All unit tests must pass
+* Race detection must be clean
+* Build must succeed with no warnings
+
+---
+
+## Architecture & Implementation Details
+
+### Configuration (`internal/config/config.go`)
+
+**Implemented:**
+* `Config` struct includes:
+    * `ICMPDiscoveryInterval time.Duration` (e.g., "5m")
     * `PingInterval time.Duration` (e.g., "1s")
     * `SNMPDailySchedule string` (e.g., "02:00")
-    * All resource limits from `SECURITY_IMPROVEMENTS.md` (`max_devices`, etc.).
-2.  **Validate:** Add validation for `SNMPDailySchedule` (must be parseable as `HH:MM`).
+    * All resource limits from `SECURITY_IMPROVEMENTS.md` (`max_devices`, etc.)
+    * `DiscoveryInterval time.Duration` (optional for backward compatibility, defaults to 4h)
+* Validation for `SNMPDailySchedule` (must be parseable as `HH:MM`, range 00:00 to 23:59)
+* Better error messages for invalid duration fields
 
-### Step 2: State Manager (`internal/state/manager.go`)
+### State Manager (`internal/state/manager.go`)
 
-1.  This is the central hub. It must be fully thread-safe (`sync.RWMutex`).
-2.  `Device` struct should store `IP`, `Hostname`, `SysDescr`, `SysObjectID`, and `LastSeen time.Time`.
-3.  Implement methods:
-    * `AddDevice(ip string) (isNew bool)`: Adds a device. Returns `true` if it was new.
-    * `UpdateDeviceSNMP(ip string, snmpData ...)`: Enriches an existing device.
+**Implemented:**
+* Central hub, fully thread-safe with `sync.RWMutex`
+* `Device` struct stores: `IP`, `Hostname`, `SysDescr`, and `LastSeen time.Time`
+    * **Note:** `SysObjectID` was removed as it's not needed for monitoring
+* Methods:
+    * `AddDevice(ip string) bool`: Adds a device. Returns `true` if it was new.
+    * `UpdateDeviceSNMP(ip, hostname, sysDescr string)`: Enriches an existing device with SNMP data.
     * `UpdateLastSeen(ip string)`: Called by pingers to keep a device alive.
     * `GetAllIPs() []string`: Returns all IPs for the daily SNMP scan.
     * `PruneStale(olderThan time.Duration)`: Removes devices not seen recently.
-    * **Crucial:** Retain the `maxDevices` limit and eviction logic.
+    * `Add(ip string)`: Legacy method maintained for compatibility.
+    * `Prune(olderThan time.Duration)`: Alias for PruneStale.
+* `maxDevices` limit and eviction logic fully implemented
 
-### Step 3: InfluxDB Writer (`internal/influx/writer.go`)
+### InfluxDB Writer (`internal/influx/writer.go`)
 
-1.  **No Regression:** This module must retain *all* hardening from `SECURITY_IMPROVEMENTS.md`.
-2.  `NewWriter(...)`: Must perform the **Health Check** and return an error on failure.
-3.  `WritePingResult(...)`: Must use a **short timeout** (e.g., 2s) and log errors, not panic.
-4.  `WriteDeviceInfo(...)`: Must use a **longer timeout** (e.g., 5s) and perform **data sanitization** on all string fields.
-5.  Ensure the client-side **rate limiter** is active.
+**Implemented:**
+* All hardening from `SECURITY_IMPROVEMENTS.md` retained
+* `NewWriter(...)`: Performs **Health Check** and returns an error on failure
+* `WritePingResult(...)`: Uses **short timeout** (2s), logs errors, never panics
+* `WriteDeviceInfo(ip, hostname, description string)`: 
+    * Uses **longer timeout** (5s)
+    * Performs **data sanitization** on all string fields
+    * Simplified signature (removed redundant snmp_name and snmp_sysid fields)
+* Client-side **rate limiter** is active
+* Schema simplified to essential fields only (IP, hostname, snmp_description)
 
-### Step 4: Scanners (`internal/discovery/scanner.go`)
+### Scanners (`internal/discovery/scanner.go`)
 
-1.  Refactor this package into two clear, concurrent functions.
-2.  `RunICMPSweep(networks []string, workers int) []string`:
-    * Uses a worker pool to ping all IPs in the CIDR ranges.
-    * **Returns only the IPs that responded.**
-    * Must *retain* the CIDR expansion limits (e.g., max /16) from `SECURITY_IMPROVEMENTS.md`.
-3.  `RunSNMPScan(ips []string, config *config.SNMP, workers int) []state.Device`:
-    * Uses a worker pool to run SNMP queries against the provided list of IPs.
-    * Applies timeouts (`config.Timeout`) to each query.
-    * Gracefully handles hosts that don't respond to SNMP (logs error, continues).
-    * Returns a list of `state.Device` structs with SNMP data filled in.
+**Implemented:**
+* Two clear, concurrent functions for decoupled operations:
 
-### Step 5: Continuous Pinger (`internal/monitoring/pinger.go`)
+**`RunICMPSweep(networks []string, workers int) []string`:**
+* Uses a worker pool to ping all IPs in the CIDR ranges
+* **Returns only the IPs that responded**
+* CIDR expansion limits (e.g., max /16) from `SECURITY_IMPROVEMENTS.md` retained
 
-1.  `StartPinger(ctx context.Context, wg *sync.WaitGroup, device state.Device, interval time.Duration, writer *influx.Writer, stateMgr *state.Manager)`:
-    * This function runs in its *own goroutine* for *one* device.
-    * It loops on a `time.NewTicker(interval)`.
+**`RunSNMPScan(ips []string, snmpConfig *config.SNMPConfig, workers int) []state.Device`:**
+* Uses a worker pool to run SNMP queries against the provided list of IPs
+* Applies timeouts (`config.Timeout`) to each query
+* Gracefully handles hosts that don't respond to SNMP (logs error, continues)
+* Returns a list of `state.Device` structs with SNMP data filled in
+* **SNMP Robustness Features:**
+    * `snmpGetWithFallback()` function: Tries Get first, falls back to GetNext if NoSuchInstance error occurs
+    * Validates OID prefixes to ensure GetNext results are under requested base OID
+    * Better compatibility with diverse device types and SNMP implementations
+* **SNMP Type Handling:**
+    * `validateSNMPString()` handles both `string` and `[]byte` types
+    * Converts byte arrays (OctetString values) to strings for ASCII/UTF-8 encoded values
+    * Prevents "invalid type: expected string, got []uint8" errors
+
+### Continuous Pinger (`internal/monitoring/pinger.go`)
+
+**Implemented:**
+* `StartPinger(ctx context.Context, wg *sync.WaitGroup, device state.Device, interval time.Duration, writer PingWriter, stateMgr StateManager)`:
+    * Runs in its *own goroutine* for *one* device
+    * Loops on a `time.NewTicker(interval)`
     * Inside the loop:
-        1.  Perform a ping (with a short timeout).
-        2.  Call `writer.WritePingResult(...)` with the outcome.
-        3.  If successful, call `stateMgr.UpdateLastSeen(device.IP)`.
-        4.  If ping or write fails, **log the error and continue the loop**. Do not exit.
-    * It must listen for `ctx.Done()` to exit gracefully.
+        1.  Perform a ping (with a short timeout)
+        2.  Call `writer.WritePingResult(...)` with the outcome
+        3.  If successful, call `stateMgr.UpdateLastSeen(device.IP)`
+        4.  If ping or write fails, **log the error and continue the loop** (does not exit)
+    * Listens for `ctx.Done()` to exit gracefully
+    * Uses interface types (`PingWriter`, `StateManager`) for better testability
+    * Properly tracks shutdown with WaitGroup
 
-### Step 6: Orchestration (`cmd/netscan/main.go`)
+### Orchestration (`cmd/netscan/main.go`)
 
-This is the most critical refactor. It must manage all concurrent loops and the state.
+**Implemented - Multi-Ticker Architecture:**
 
-1.  **Init:**
-    * Load and validate config.
-    * Init `StateManager`.
-    * Init `InfluxWriter` (and **fail fast** if health check fails).
-    * Setup signal handling for graceful shutdown (using a main `context.Context`).
-    * `activePingers := make(map[string]context.CancelFunc)`
-    * `pingersMu sync.Mutex` (**CRITICAL**: Use this mutex for *all* access to `activePingers`).
+**1. Initialization:**
+* Load and validate config (with `-config` flag support)
+* Init `StateManager`
+* Init `InfluxWriter` with **fail fast** if health check fails
+* Setup signal handling for graceful shutdown (using a main `context.Context`)
+* `activePingers := make(map[string]context.CancelFunc)`
+* `pingersMu sync.Mutex` (**CRITICAL**: Used for *all* access to `activePingers`)
+* `var pingerWg sync.WaitGroup` for tracking all pinger goroutines
 
-2.  **Ticker 1: ICMP Discovery Loop** (Runs every `config.ICMPDiscoveryInterval`):
-    * `log.Println("Starting ICMP discovery scan...")`
-    * `responsiveIPs := discovery.RunICMPSweep(...)`
-    * Iterate `responsiveIPs`:
-        * `isNew := stateMgr.AddDevice(ip)`
-        * If `isNew`:
-            * `log.Printf("New device found: %s. Performing initial SNMP scan.", ip)`
-            * Trigger an *immediate, non-blocking* scan:
-                `go func(newIP string) { ... snmpDevices := discovery.RunSNMPScan([]string{newIP}, ...); ... stateMgr.UpdateDeviceSNMP(newIP, snmpDevices[0]) ... }(ip)`
+**2. Ticker 1: ICMP Discovery Loop** (Runs every `config.ICMPDiscoveryInterval`, e.g., 5m):
+* Logs: `"Starting ICMP discovery scan..."`
+* `responsiveIPs := discovery.RunICMPSweep(...)`
+* For each `responsiveIP`:
+    * `isNew := stateMgr.AddDevice(ip)`
+    * If `isNew`:
+        * Logs: `"New device found: %s. Performing initial SNMP scan."`
+        * Triggers *immediate, non-blocking* scan in goroutine
+        * SNMP scan results update StateManager and write to InfluxDB
+        * Logs success or failure for debugging
 
-3.  **Ticker 2: Daily SNMP Scan Loop** (Runs once per day at `config.SNMPDailySchedule`):
-    * `log.Println("Starting daily full SNMP scan...")`
-    * `allIPs := stateMgr.GetAllIPs()`
-    * `snmpDevices := discovery.RunSNMPScan(allIPs, ...)`
-    * Iterate `snmpDevices` and update the state:
-        * `stateMgr.UpdateDeviceSNMP(...)`
-    * `log.Println("Daily SNMP scan complete.")`
+**3. Ticker 2: Daily SNMP Scan Loop** (Runs at `config.SNMPDailySchedule`, e.g., "02:00"):
+* Calculates next run time using time parsing
+* Logs: `"Starting daily full SNMP scan..."`
+* `allIPs := stateMgr.GetAllIPs()`
+* `snmpDevices := discovery.RunSNMPScan(allIPs, ...)`
+* Updates StateManager with SNMP data
+* Writes device info to InfluxDB
+* Logs: `"Daily SNMP scan complete."`
+* **Enhanced logging:** Shows success/failure counts, confirms InfluxDB writes
 
-4.  **Ticker 3: Pinger Reconciliation Loop** (Runs frequently, e.g., every 5 seconds):
-    * This loop ensures the `activePingers` map matches the `StateManager`.
-    * `pingersMu.Lock()` (Lock the map for the whole reconciliation).
-    * `currentStateIPs := stateMgr.GetAllIPsAsSet()`
-    * **Start new pingers:**
-        * Iterate `currentStateIPs`:
-        * If `ip` is *not* in `activePingers`:
-            * `log.Printf("Starting continuous pinger for %s", ip)`
-            * Create `pingerCtx, pingerCancel := context.WithCancel(mainCtx)`
-            * `activePingers[ip] = pingerCancel`
-            * `go monitoring.StartPinger(pingerCtx, ...)`
-    * **Stop old pingers:**
-        * Iterate `activePingers`:
-        * If `ip` is *not* in `currentStateIPs`:
-            * `log.Printf("Stopping continuous pinger for stale device %s", ip)`
-            * `cancelFunc()`
-            * `delete(activePingers, ip)`
+**4. Ticker 3: Pinger Reconciliation Loop** (Runs every 5 seconds):
+* Ensures `activePingers` map matches `StateManager`
+* `pingersMu.Lock()` (Lock for entire reconciliation)
+* `currentStateIPs := stateMgr.GetAllIPs()` converted to set
+* **Start new pingers:**
+    * For each IP in state not in `activePingers`:
+        * Logs: `"Starting continuous pinger for %s"`
+        * Creates `pingerCtx, pingerCancel := context.WithCancel(mainCtx)`
+        * `activePingers[ip] = pingerCancel`
+        * `pingerWg.Add(1)`
+        * `go monitoring.StartPinger(pingerCtx, &pingerWg, ...)`
+* **Stop old pingers:**
+    * For each IP in `activePingers` not in state:
+        * Logs: `"Stopping continuous pinger for stale device %s"`
+        * Calls `cancelFunc()`
+        * `delete(activePingers, ip)`
+* `pingersMu.Unlock()`
+
+**5. Ticker 4: State Pruning Loop** (Runs every 1 hour):
+* Logs: `"Pruning stale devices..."`
+* `stateMgr.PruneStale(24 * time.Hour)`
+
+**6. Graceful Shutdown:**
+* When `mainCtx` is canceled (by SIGINT/SIGTERM):
+    * Stop all tickers
+    * `pingersMu.Lock()`, iterate `activePingers`, call `cancelFunc()` for all
     * `pingersMu.Unlock()`
+    * `pingerWg.Wait()` to wait for all pingers to exit
+    * Close InfluxDB client
+    * Logs: `"Shutdown complete."`
 
-5.  **Ticker 4: State Pruning Loop** (Runs infrequently, e.g., every 1 hour):
-    * `log.Println("Pruning stale devices...")`
-    * `stateMgr.PruneStale(24 * time.Hour)` (or some other configurable duration).
-
-6.  **Graceful Shutdown:**
-    * When the `mainCtx` is canceled (by SIGINT/SIGTERM):
-    * Stop all tickers.
-    * `pingersMu.Lock()`, iterate `activePingers`, and call `cancelFunc()` for all.
-    * `pingersMu.Unlock()`.
-    * Wait for `wg.Wait()` on all pingers.
-    * Close InfluxDB client.
-    * `log.Println("Shutdown complete.")`
+**Key Implementation Notes:**
+* All four tickers run concurrently and independently
+* Pinger reconciliation ensures consistency between state and active pingers
+* Proper mutex protection prevents race conditions on `activePingers` map
+* WaitGroup ensures clean shutdown of all goroutines
+* Enhanced logging provides visibility into all operations
