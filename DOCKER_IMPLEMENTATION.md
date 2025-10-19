@@ -12,6 +12,7 @@ A multi-stage Docker build configuration that:
 - **Stage 1 (Builder)**: Uses `golang:1.21-alpine` to compile the Go binary
   - Installs build dependencies (git, ca-certificates)
   - Leverages Docker layer caching for go modules
+  - Uses Docker Buildx `TARGETOS` and `TARGETARCH` arguments for multi-platform builds
   - Builds a static binary with optimizations (`CGO_ENABLED=0`, `-ldflags="-w -s"`)
 - **Stage 2 (Runtime)**: Uses `alpine:latest` for minimal image size
   - Installs runtime dependencies (ca-certificates, libcap)
@@ -22,6 +23,7 @@ A multi-stage Docker build configuration that:
 
 **Key Features**:
 - Multi-stage build reduces final image size
+- Multi-platform support (respects TARGETARCH and TARGETOS)
 - Non-root user execution for security
 - Linux capabilities instead of full root access
 - Optimized layer caching for faster builds
