@@ -2,7 +2,7 @@
 
 ## Project Goal
 
-`netscan` is a Go-based network monitoring service with a decoupled, multi-ticker architecture. The service follows this workflow:
+`netscan` is a Go-based network monitoring service with a decoupled, multi-ticker architecture designed for containerized deployment via Docker Compose, with native deployment as an alternative option. The service follows this workflow:
 
 1.  **Periodic ICMP Discovery:** Scan configured network ranges to find new, active devices.
 2.  **Continuous ICMP Monitoring:** For *every* device found, initiate an immediate and continuous high-frequency (e.g., 1-second) ICMP ping to track real-time uptime.
@@ -10,6 +10,24 @@
     * **Initial:** Perform an SNMP query *immediately* after a device is first discovered.
     * **Scheduled:** Perform a full SNMP scan on *all* known-alive devices at a configurable daily time (e.g., 02:00 AM).
 4.  **Resilient Data Persistence:** Write all monitoring (ICMP) and discovery (SNMP) data to InfluxDB, with robust protections against network failures, data corruption, and database overload.
+
+## Deployment Architecture
+
+### Docker Deployment (Primary)
+- **Recommended approach** for ease of deployment and consistency
+- Multi-stage Dockerfile with minimal Alpine Linux runtime (~15MB)
+- Docker Compose orchestrates netscan + InfluxDB stack
+- **Security Note:** Container runs as root (required for ICMP raw socket access in Linux containers)
+- Host networking mode for direct network access
+- Environment variable support via docker-compose.yml or optional .env file
+- See `README.md` for Docker deployment instructions
+
+### Native Deployment (Alternative)
+- For maximum security with non-root service user
+- Uses dedicated `netscan` system user with no shell access
+- CAP_NET_RAW capability via setcap (no root required)
+- Systemd service with security restrictions
+- See `README_NATIVE.md` for native deployment instructions
 
 ---
 
@@ -36,6 +54,32 @@
 
 ## Lessons Learned from Production Implementation
 
+### Docker Deployment Lessons
+
+**ICMP permissions in containers:**
+* Non-root users cannot create raw ICMP sockets even with CAP_NET_RAW in containerized environments
+* This is a Linux kernel security limitation, not a Docker configuration issue
+* Solution: Container must run as root for ICMP ping functionality
+* Trade-off accepted: Root user necessary but container remains isolated via Docker namespaces
+
+**Configuration management:**
+* Use environment variables in docker-compose.yml with `${VAR:-default}` syntax
+* Supports optional .env file for production credentials (not committed to git)
+* Config placeholders like `${INFLUXDB_TOKEN}` automatically expanded by Go's `os.ExpandEnv()`
+* No manual sed replacements needed - just `cp config.yml.example config.yml`
+
+**Diagnostic logging is essential:**
+* Add logging to show which networks are being scanned: `log.Printf("Scanning networks: %v", cfg.Networks)`
+* Log specific error details for ICMP failures: `log.Printf("Ping failed for %s: %v", ip, err)`
+* Helps identify whether issue is config reading, permissions, or network access
+* Critical for troubleshooting containerized deployments
+
+**Multi-stage builds:**
+* Stage 1: Build with `golang:1.25-alpine` (matches go.mod requirement)
+* Stage 2: Runtime with minimal `alpine:latest` (~15MB final image)
+* Use `GOOS=linux GOARCH=amd64` for consistent builds
+* Apply binary optimizations: `-ldflags="-w -s"` strips debug info
+
 ### SNMP Best Practices
 
 **Always use fallback mechanisms:**
@@ -50,15 +94,20 @@
 
 ### Configuration Best Practices
 
+**Environment variable support:**
+* Docker deployment: Environment variables from docker-compose.yml (or optional .env file)
+* Native deployment: Environment variables from .env file (required)
+* Always document which approach applies to which deployment method
+
 **Maintain backward compatibility:**
 * Make new fields optional with sensible defaults
 * Don't break existing configs when adding new features
 * Provide clear error messages for invalid configurations
 
-**Keep config files clean:**
-* Remove deprecated fields from example configs
-* Reorganize for clarity when adding new features
-* Document all required vs optional fields
+**Network configuration warnings:**
+* Example network ranges (192.168.0.0/24, etc.) are real but may not match user's network
+* Add prominent warnings in config.yml.example that users must update these
+* Explain how to find actual network range (ip addr, ifconfig)
 
 ### InfluxDB Schema Best Practices
 
@@ -79,34 +128,46 @@
 * Log each operation result individually for debugging
 * Provide summary logs after operations complete
 
-**Make failures obvious:**
-* Log when SNMP fails for new devices
-* Indicate that failed devices will be retried in next scan
-* Don't hide errors but also don't spam logs
+**Diagnostic logging for troubleshooting:**
+* Log networks being scanned to verify config reading
+* Log specific error messages (don't silently fail)
+* Add context: which phase (discovery, monitoring, SNMP), which device
+* Makes troubleshooting issues much easier, especially in Docker
 
 ### Documentation Best Practices
 
-**Focus on current features:**
-* Remove verbose iterative fix details from CHANGELOG
-* Keep README concise and focused on capabilities
-* Document what the software does, not the development process
+**Separate deployment methods clearly:**
+* README.md: Docker deployment (primary)
+* README_NATIVE.md: Native installation (alternative for maximum security)
+* Don't mix deployment instructions - keeps docs focused and clear
 
-**Maintain consistency:**
-* Update all docs when making schema or config changes
-* Keep README, CHANGELOG, and code comments in sync
-* Remove references to deprecated features everywhere
+**Security implications must be explained:**
+* Document why Docker container runs as root (ICMP raw socket requirement)
+* Explain security measures despite root user (isolation, minimal capabilities)
+* Provide comparison table: Docker (root) vs Native (service user)
+* Guide users to native deployment if maximum security is priority
+
+**Troubleshooting sections are critical:**
+* Include diagnostic commands users can run
+* Explain common failure modes and how to identify them
+* Provide step-by-step verification procedures
+* Docker troubleshooting especially important due to permission complexities
 
 ---
 
 ## Technology Stack
 
-* **Language**: Go 1.21+
+* **Language**: Go 1.25+ (updated from 1.21 - ensure Dockerfile uses golang:1.25-alpine)
 * **Key Libraries**:
     * `gopkg.in/yaml.v3` (Config)
     * `github.com/gosnmp/gosnmp` (SNMP)
     * `github.com/prometheus-community/pro-bing` (ICMP)
     * `github.com/influxdata/influxdb-client-go/v2` (InfluxDB)
     * `sync.RWMutex` (Critical for `StateManager` and `activePingers` map)
+* **Deployment**:
+    * Docker + Docker Compose (primary deployment method)
+    * InfluxDB v2.7 container
+    * Alpine Linux base image
 
 ---
 
@@ -127,8 +188,10 @@
 ### CI/CD Requirements
 * `./netscan --help` must work (flag support required)
 * All unit tests must pass
-* Race detection must be clean
+* Race detection must be clean: `go test -race ./...`
 * Build must succeed with no warnings
+* Docker Compose workflow validates full stack deployment
+* Workflow creates config.yml from template and runs `docker compose up`
 
 ---
 
