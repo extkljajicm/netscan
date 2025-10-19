@@ -67,15 +67,28 @@ The easiest way to get netscan running is with Docker Compose, which sets up bot
    nano config.yml
    ```
    
-   **IMPORTANT**: You must update the `networks` section in config.yml with your actual network ranges:
+   **CRITICAL**: The example networks in config.yml.example (192.168.0.0/24, etc.) are real ranges but may not match YOUR network. You must verify and update:
    ```yaml
    networks:
-     - "192.168.1.0/24"    # Replace with your actual network
-     # - "10.0.0.0/16"     # Add more networks as needed
+     - "192.168.1.0/24"    # ✅ Use YOUR actual network range
+     # - "10.0.0.0/16"     # ✅ Add more ranges if needed
    ```
    
-   The default example networks (192.168.0.0/24, 10.0.0.0/16, 172.16.0.0/12) are placeholders. 
-   If netscan finds 0 devices, it means these ranges don't match your network.
+   **Common Mistakes**:
+   - ❌ Not creating config.yml (just using config.yml.example)
+   - ❌ Using example ranges that don't match your network  
+   - ❌ Wrong subnet mask (e.g., /16 instead of /24)
+   
+   To find your network range:
+   ```bash
+   # On Linux
+   ip addr show | grep inet
+   
+   # On macOS
+   ifconfig | grep inet
+   
+   # Example: If your IP is 192.168.1.100, your network is likely 192.168.1.0/24
+   ```
 
 3. **(Optional) Configure credentials with .env file**
    
@@ -339,27 +352,44 @@ docker build -t netscan:local .
 
 **Container is running but finding 0 devices:**
 ```bash
-# Check logs to see what networks are being scanned
+# 1. VERIFY config.yml EXISTS in your directory
+ls -la config.yml
+# If missing, create it: cp config.yml.example config.yml
+
+# 2. CHECK what networks are being scanned
 docker compose logs netscan | grep "discovery"
 
-# Common causes:
-# 1. Network ranges in config.yml don't match your actual network
-#    Solution: Update config.yml with your real network ranges
-#    Example: If your network is 192.168.1.0/24, update:
-#    networks:
-#      - "192.168.1.0/24"
+# 3. VERIFY config.yml is properly mounted in container
+docker exec -it netscan cat /app/config.yml | grep -A 5 "networks:"
+# This should show the networks section from your config.yml
 
-# 2. Verify network mode is 'host' (required for ICMP)
+# 4. TEST if config is being read correctly
+docker exec -it netscan ls -la /app/config.yml
+# Should show: -r--r--r-- (read-only, mounted file)
+
+# Common causes:
+# A. config.yml doesn't exist (forgot to cp config.yml.example config.yml)
+#    Solution: Create config.yml from example
+#
+# B. Network ranges don't match your actual network
+#    Solution: Update networks section with YOUR network ranges
+#    Example: If your IP is 192.168.1.100, use 192.168.1.0/24
+#    Even 192.168.0.0/24 and 192.168.1.0/24 are DIFFERENT networks!
+#
+# C. Wrong subnet mask (e.g., /16 instead of /24)
+#    Solution: Use correct CIDR notation for your network
+#
+# D. Container not on host network
 docker inspect netscan | grep NetworkMode
 # Should show: "NetworkMode": "host"
 
-# 3. Check if container has CAP_NET_RAW capability
+# 5. TEST ping manually from container (replace IP with one from your network)
+docker exec -it netscan ping -c 2 192.168.0.1
+# If this fails, it's a network/permission issue, not config
+
+# 6. CHECK if container has CAP_NET_RAW capability
 docker inspect netscan | grep -A 5 CapAdd
 # Should show: "CAP_NET_RAW"
-
-# 4. Test ping manually from container
-docker exec -it netscan ping -c 2 192.168.1.1
-# Replace with an IP from your network
 ```
 
 **Container keeps restarting:**

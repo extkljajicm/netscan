@@ -15,6 +15,8 @@ services:
       - NET_RAW
     
     # Mount config file
+    # IMPORTANT: You must create config.yml first with: cp config.yml.example config.yml
+    # The config.yml file should exist in the same directory as docker-compose.yml
     volumes:
       - ./config.yml:/app/config.yml:ro
     
