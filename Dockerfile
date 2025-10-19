@@ -45,8 +45,10 @@ RUN setcap cap_net_raw+ep /app/netscan
 # Change ownership to non-root user
 RUN chown -R netscan:netscan /app
 
-# Switch to non-root user
-USER netscan
+# NOTE: Running as root is required for ICMP raw socket access in Docker
+# Even with CAP_NET_RAW capability, non-root users cannot create raw ICMP sockets
+# This is a limitation of the Linux kernel's security model in containerized environments
+# USER netscan  # Commented out - must run as root for ICMP to work
 
 # Set default config path (can be overridden with -config flag)
 ENV CONFIG_PATH=/app/config.yml
