@@ -606,9 +606,18 @@ func incIP(ip net.IP) {
 
 // validateSNMPString validates and sanitizes SNMP response string values
 func validateSNMPString(value interface{}, oidName string) (string, error) {
-	str, ok := value.(string)
-	if !ok {
-		return "", fmt.Errorf("invalid type for %s: expected string, got %T", oidName, value)
+	var str string
+	
+	// Handle different types that SNMP can return for string values
+	switch v := value.(type) {
+	case string:
+		str = v
+	case []byte:
+		// SNMP OctetString values are often returned as byte arrays
+		// Note: []byte and []uint8 are the same type in Go
+		str = string(v)
+	default:
+		return "", fmt.Errorf("invalid type for %s: expected string or []byte, got %T", oidName, value)
 	}
 
 	// Check for null bytes and other control characters that could be dangerous
