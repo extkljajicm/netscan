@@ -15,12 +15,8 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Use buildx args for multi-platform builds
-ARG TARGETOS
-ARG TARGETARCH
-
-# Build the binary with optimizations
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+# Build the binary with optimizations for linux/amd64
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-w -s" \
     -o netscan \
     ./cmd/netscan

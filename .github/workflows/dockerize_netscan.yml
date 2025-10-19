@@ -1,75 +1,58 @@
-name: Docker Build and Publish
+name: Docker Compose Test
 
 on:
   push:
     branches: [ main ]
-    tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-
 jobs:
-  docker:
-    name: Build and Push Docker Image
+  docker-compose-test:
+    name: Test Docker Compose Setup
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
+    - name: Create config.yml from template
+      run: |
+        cp config.yml.example config.yml
+        echo "Config file created from template"
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+    - name: Build and start Docker Compose stack
+      run: |
+        docker compose build
+        docker compose up -d
 
-    - name: Log in to GitHub Container Registry
-      if: github.event_name != 'pull_request'
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+    - name: Wait for services to be healthy
+      run: |
+        echo "Waiting for services to start..."
+        timeout 60 bash -c 'until docker compose ps | grep -q "healthy"; do sleep 2; done' || true
+        docker compose ps
 
-    - name: Extract metadata (tags, labels) for Docker
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=semver,pattern={{major}}
-          type=sha,prefix={{branch}}-
-          type=raw,value=latest,enable={{is_default_branch}}
+    - name: Check netscan logs
+      run: |
+        echo "Checking netscan logs..."
+        docker compose logs netscan || true
 
-    - name: Build and push Docker image
-      id: build-and-push
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./Dockerfile
-        platforms: linux/amd64,linux/arm64
-        push: ${{ github.event_name != 'pull_request' }}
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+    - name: Check InfluxDB logs
+      run: |
+        echo "Checking InfluxDB logs..."
+        docker compose logs influxdb || true
 
-    - name: Generate artifact attestation
-      if: github.event_name != 'pull_request'
-      uses: actions/attest-build-provenance@v1
-      with:
-        subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        subject-digest: ${{ steps.build-and-push.outputs.digest }}
-        push-to-registry: true
+    - name: Verify netscan is running
+      run: |
+        docker compose ps netscan
+        if docker compose ps netscan | grep -q "Up"; then
+          echo "✓ netscan service is running"
+        else
+          echo "✗ netscan service is not running"
+          exit 1
+        fi
+
+    - name: Stop Docker Compose stack
+      if: always()
+      run: |
+        docker compose down -v

@@ -1,7 +1,7 @@
 # Docker Implementation Summary
 
 ## Overview
-This document describes the Docker implementation for the netscan network monitoring application, including the Dockerfile, GitHub Actions workflow, and usage instructions.
+This document describes the Docker implementation for the netscan network monitoring application using local builds and Docker Compose for deployment.
 
 ## Files Added
 
@@ -12,8 +12,7 @@ A multi-stage Docker build configuration that:
 - **Stage 1 (Builder)**: Uses `golang:1.21-alpine` to compile the Go binary
   - Installs build dependencies (git, ca-certificates)
   - Leverages Docker layer caching for go modules
-  - Uses Docker Buildx `TARGETOS` and `TARGETARCH` arguments for multi-platform builds
-  - Builds a static binary with optimizations (`CGO_ENABLED=0`, `-ldflags="-w -s"`)
+  - Builds a static binary with optimizations for linux/amd64
 - **Stage 2 (Runtime)**: Uses `alpine:latest` for minimal image size
   - Installs runtime dependencies (ca-certificates, libcap)
   - Creates non-root user `netscan` for security
@@ -23,7 +22,7 @@ A multi-stage Docker build configuration that:
 
 **Key Features**:
 - Multi-stage build reduces final image size
-- Multi-platform support (respects TARGETARCH and TARGETOS)
+- Linux/amd64 architecture support
 - Non-root user execution for security
 - Linux capabilities instead of full root access
 - Optimized layer caching for faster builds
@@ -48,37 +47,27 @@ Excludes unnecessary files from Docker build context:
 ### 3. GitHub Actions Workflow
 **Location**: `/.github/workflows/dockerize_netscan.yml`
 
-Automated Docker image build and publish workflow:
-- **Triggers**: Push to main, version tags, pull requests, manual dispatch
-- **Registry**: GitHub Container Registry (ghcr.io)
-- **Platforms**: linux/amd64, linux/arm64
+Automated Docker Compose testing workflow:
+- **Triggers**: Push to main, pull requests, manual dispatch
+- **Purpose**: Validates that the Docker Compose stack builds and runs correctly
 - **Features**:
-  - QEMU for multi-platform builds
-  - Docker Buildx for advanced build capabilities
-  - Image metadata extraction for proper tagging
-  - GitHub Actions cache for faster rebuilds
-  - Build provenance attestation for security
-  - Automatic push on main branch and tags
-
-**Image Tags**:
-- `latest` - Latest build from main branch
-- `main` - Main branch builds
-- `vX.Y.Z` - Version tags (semantic versioning)
-- `v1.2` - Major.minor version tags
-- `v1` - Major version tags
-- `{branch}-{sha}` - Commit-specific tags
+  - Creates config.yml from template
+  - Builds Docker images locally
+  - Starts the complete stack (netscan + InfluxDB)
+  - Verifies services are running
+  - Checks logs for errors
+  - Cleans up after testing
 
 ### 4. Docker Compose Configuration
-**Location**: `/docker-compose.netscan.yml`
+**Location**: `/docker-compose.yml`
 
 Complete deployment stack including:
 - **netscan service**:
-  - Uses GitHub Container Registry image
+  - Builds from local Dockerfile
   - Host networking for ICMP/SNMP access
   - CAP_NET_RAW capability
   - Config file mounted as read-only volume
-  - Environment variables for credentials
-  - Resource limits (CPU: 2 cores, Memory: 512MB)
+  - Depends on InfluxDB health check
   - Health check dependency on InfluxDB
 - **InfluxDB service**:
   - Persistent volume for data
@@ -87,7 +76,7 @@ Complete deployment stack including:
 
 **Usage**:
 ```bash
-docker-compose -f docker-compose.netscan.yml up -d
+docker compose up -d
 ```
 
 ### 5. README Updates
@@ -96,57 +85,51 @@ docker-compose -f docker-compose.netscan.yml up -d
 Added comprehensive Docker documentation:
 - **Deployment Section**: New "Docker (Recommended for Containers)" subsection
   - Quick start with Docker Compose
-  - Pull and run from GitHub Container Registry
-  - Build Docker image locally
+  - Step-by-step instructions for local deployment
   - Configuration notes and best practices
-- **Service Management Section**: Added Docker commands
+- **Service Management Section**: Added Docker Compose commands
   - View status, logs
-  - Restart, stop, remove containers
+  - Restart, rebuild services
 - **Building Section**: Added Docker image build instructions
-  - Local builds
-  - Multi-platform builds with buildx
+  - Local builds with Docker Compose
+  - Manual Docker builds
 - **Cross-Platform Builds**: Updated to reflect Docker support
-  - Docker images for amd64 and arm64
+  - Docker images for linux/amd64
   - Native binaries for amd64
 
 ## Docker Image Usage
 
-### Pull from GitHub Container Registry
+### Build and Run with Docker Compose (Recommended)
 
 ```bash
-# Pull latest image
-docker pull ghcr.io/extkljajicm/netscan:latest
+# Clone the repository
+git clone https://github.com/extkljajicm/netscan.git
+cd netscan
 
-# Pull specific version
-docker pull ghcr.io/extkljajicm/netscan:v1.0.0
-```
-
-### Run Container
-
-```bash
-# Create config file
+# Create config file from template
 cp config.yml.example config.yml
-# Edit config.yml with your settings
 
-# Run with host networking
-docker run -d \
-  --name netscan \
-  --network host \
-  --cap-add=NET_RAW \
-  -v $(pwd)/config.yml:/app/config.yml:ro \
-  -e INFLUXDB_TOKEN=your-token \
-  -e SNMP_COMMUNITY=your-community \
-  ghcr.io/extkljajicm/netscan:latest
+# Edit config.yml with your network settings
+nano config.yml
+
+# Build and start the stack
+docker compose up -d
+
+# View logs
+docker compose logs -f netscan
+
+# Stop the stack
+docker compose down
 ```
 
 ### Build Locally
 
 ```bash
-# Build for current platform
-docker build -t netscan:local .
+# Build the Docker image
+docker compose build
 
-# Build for multiple platforms
-docker buildx build --platform linux/amd64,linux/arm64 -t netscan:local .
+# Or build with docker directly
+docker build -t netscan:local .
 ```
 
 ## Security Considerations

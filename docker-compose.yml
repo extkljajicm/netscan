@@ -1,5 +1,31 @@
 version: '3.8'
+
 services:
+  # netscan service - network monitoring application
+  netscan:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: netscan
+    restart: unless-stopped
+    
+    # Network mode: host allows netscan to access the host network for ICMP and SNMP
+    network_mode: host
+    
+    # Add Linux capability for raw socket access (ICMP ping)
+    cap_add:
+      - NET_RAW
+    
+    # Mount config file
+    volumes:
+      - ./config.yml:/app/config.yml:ro
+    
+    # Ensure InfluxDB is started first
+    depends_on:
+      influxdb:
+        condition: service_healthy
+
+  # InfluxDB service for metrics storage
   influxdb:
     image: influxdb:2.7
     container_name: influxdbv2
@@ -15,5 +41,12 @@ services:
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=netscan-token
     volumes:
       - influxdbv2-data:/var/lib/influxdb2
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
 volumes:
   influxdbv2-data:

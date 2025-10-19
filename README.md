@@ -229,65 +229,42 @@ Runs the multi-ticker architecture with:
 
 ### Docker (Recommended for Containers)
 
-The netscan application is available as a Docker image from GitHub Container Registry.
+Deploy netscan using Docker Compose for a complete monitoring stack with InfluxDB.
 
 #### Quick Start with Docker Compose
 
 ```bash
+# Clone the repository
+git clone https://github.com/extkljajicm/netscan.git
+cd netscan
+
 # Create config.yml from template
 cp config.yml.example config.yml
 
-# Edit config.yml with your settings
+# Edit config.yml with your network settings
 nano config.yml
 
-# Start netscan with InfluxDB using docker-compose
-docker-compose -f docker-compose.netscan.yml up -d
+# Build and start the complete stack (netscan + InfluxDB)
+docker compose up -d
 
 # View logs
-docker-compose -f docker-compose.netscan.yml logs -f netscan
+docker compose logs -f netscan
 
 # Stop services
-docker-compose -f docker-compose.netscan.yml down
+docker compose down
 ```
 
-#### Pull and Run Docker Image
-
-```bash
-# Pull the latest image
-docker pull ghcr.io/extkljajicm/netscan:latest
-
-# Run with host networking (required for ICMP/SNMP access)
-docker run -d \
-  --name netscan \
-  --network host \
-  --cap-add=NET_RAW \
-  -v $(pwd)/config.yml:/app/config.yml:ro \
-  -e INFLUXDB_TOKEN=your-token \
-  -e SNMP_COMMUNITY=your-community \
-  ghcr.io/extkljajicm/netscan:latest
-```
-
-#### Build Docker Image Locally
-
-```bash
-# Build the image
-docker build -t netscan:local .
-
-# Run the locally built image
-docker run -d \
-  --name netscan \
-  --network host \
-  --cap-add=NET_RAW \
-  -v $(pwd)/config.yml:/app/config.yml:ro \
-  netscan:local
-```
+**What this does:**
+- Builds the netscan Docker image locally from the Dockerfile
+- Starts InfluxDB for metrics storage
+- Starts netscan with host networking for ICMP/SNMP access
+- Mounts your config.yml into the container
 
 **Docker Configuration Notes:**
-- **Network Mode**: Use `--network host` to allow netscan to access network devices for ICMP and SNMP
-- **Capabilities**: `--cap-add=NET_RAW` is required for ICMP ping functionality
-- **Config File**: Mount your `config.yml` as a read-only volume
-- **Environment Variables**: Pass sensitive credentials via environment variables instead of storing in config
-- **Available Tags**: `latest`, `main`, version tags (e.g., `v1.0.0`), and commit SHAs
+- **Network Mode**: Uses `host` networking to allow netscan to access network devices for ICMP and SNMP
+- **Capabilities**: `NET_RAW` capability is added for ICMP ping functionality
+- **Config File**: Your `config.yml` is mounted as a read-only volume
+- **InfluxDB**: Pre-configured with test credentials (change for production)
 
 ### Native Installation (Automated)
 
@@ -364,25 +341,37 @@ docker logs -f netscan
 # Restart container
 docker restart netscan
 
-# Stop container
-docker stop netscan
+### Docker
 
-# Remove container
-docker rm netscan
+```bash
+# View container status
+docker compose ps
+
+# View logs
+docker compose logs -f netscan
+
+# Restart services
+docker compose restart
+
+# Stop services
+docker compose down
+
+# Rebuild and restart after code changes
+docker compose up -d --build
 ```
 
 ## Building
 
 ### Docker Image
 
-Docker images are automatically built and published via GitHub Actions on every push to main and on version tags. See `.github/workflows/dockerize_netscan.yml` for details.
+The Docker image is built locally using the Dockerfile when you run `docker compose up`.
 
 ```bash
-# Build locally
-docker build -t netscan:local .
+# Build the image manually
+docker compose build
 
-# Build for multiple platforms (requires buildx)
-docker buildx build --platform linux/amd64,linux/arm64 -t netscan:local .
+# Or build with docker directly
+docker build -t netscan:local .
 ```
 
 ### Native Binary
@@ -403,9 +392,8 @@ go build -o netscan ./cmd/netscan
 
 #### Cross-Platform Builds
 
-**Docker Images (via GitHub Actions):**
-- Linux (amd64)
-- Linux (arm64)
+**Docker Images:**
+- Linux (amd64) - Built locally via Dockerfile
 
 **Native Binaries (via CI/CD):**
 - Linux (amd64)
@@ -439,11 +427,11 @@ go test -cover ./...             # Coverage report
 ### Integration Testing
 
 ```bash
-# Start test InfluxDB
-sudo docker-compose up -d
+# Start test environment with Docker Compose
+docker compose up -d
 
-# Run netscan with test config
-./netscan -config config.yml
+# View logs to verify it's working
+docker compose logs -f netscan
 ```
 
 ### CI/CD Pipeline
@@ -451,6 +439,7 @@ sudo docker-compose up -d
 Automated testing runs on push, pull requests, and version tags.
 
 **Features:**
+- Docker Compose stack validation
 - Linux amd64 binary builds
 - Automated changelog generation
 - Code coverage reporting

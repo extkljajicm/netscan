@@ -52,13 +52,13 @@ fi
 
 echo ""
 
-# Check if docker-compose.netscan.yml exists
-echo -n "Checking docker-compose.netscan.yml... "
-if [ -f "docker-compose.netscan.yml" ]; then
+# Check if docker-compose.yml exists
+echo -n "Checking docker-compose.yml... "
+if [ -f "docker-compose.yml" ]; then
     echo -e "${GREEN}OK${NC}"
 else
     echo -e "${RED}FAILED${NC}"
-    echo "docker-compose.netscan.yml not found in current directory"
+    echo "docker-compose.yml not found in current directory"
     exit 1
 fi
 
@@ -104,14 +104,14 @@ fi
 echo ""
 
 # Validate docker-compose.yml syntax
-echo -n "Validating docker-compose.netscan.yml syntax... "
-if docker-compose -f docker-compose.netscan.yml config > /dev/null 2>&1; then
+echo -n "Validating docker-compose.yml syntax... "
+if docker-compose -f docker-compose.yml config > /dev/null 2>&1; then
     echo -e "${GREEN}OK${NC}"
-elif docker compose -f docker-compose.netscan.yml config > /dev/null 2>&1; then
+elif docker compose -f docker-compose.yml config > /dev/null 2>&1; then
     echo -e "${GREEN}OK (Docker Compose v2)${NC}"
 else
     echo -e "${RED}FAILED${NC}"
-    echo "docker-compose.netscan.yml has syntax errors"
+    echo "docker-compose.yml has syntax errors"
     exit 1
 fi
 
@@ -120,8 +120,8 @@ echo "=== Verification Complete ==="
 echo ""
 echo "Next steps:"
 echo "1. Edit config.yml with your network settings"
-echo "2. Build the Docker image: docker build -t netscan:local ."
-echo "3. Run with Docker Compose: docker-compose -f docker-compose.netscan.yml up -d"
-echo "4. Or run standalone: docker run --network host --cap-add=NET_RAW -v \$(pwd)/config.yml:/app/config.yml:ro netscan:local"
+echo "2. Start the stack: docker compose up -d"
+echo "3. View logs: docker compose logs -f netscan"
+echo "4. Stop the stack: docker compose down"
 echo ""
 echo "For more information, see DOCKER_IMPLEMENTATION.md"
