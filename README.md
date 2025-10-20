@@ -67,7 +67,7 @@ The easiest way to get netscan running is with Docker Compose, which sets up bot
    nano config.yml
    ```
    
-   **CRITICAL**: The example networks in config.yml.example (192.168.0.0/24, etc.) are real ranges but may not match YOUR network. You must verify and update:
+   **CRITICAL**: The example networks in config.yml.example (192.168.0.0/24, etc.):
    ```yaml
    networks:
      - "192.168.1.0/24"    # ✅ Use YOUR actual network range
@@ -195,7 +195,7 @@ The `docker-compose.yml` configures:
    docker compose up -d
    ```
 
-**Alternative: Edit docker-compose.yml directly** (less secure, values visible in git):
+**Alternative: Edit docker-compose.yml directly**:
 
 ```yaml
 services:
