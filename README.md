@@ -73,23 +73,8 @@ The easiest way to get netscan running is with Docker Compose, which sets up bot
      - "192.168.1.0/24"    # ✅ Use YOUR actual network range
      # - "10.0.0.0/16"     # ✅ Add more ranges if needed
    ```
-   
-   **Common Mistakes**:
-   - ❌ Not creating config.yml (just using config.yml.example)
-   - ❌ Using example ranges that don't match your network  
-   - ❌ Wrong subnet mask (e.g., /16 instead of /24)
-   
-   To find your network range:
-   ```bash
-   # On Linux
-   ip addr show | grep inet
-   
-   # On macOS
-   ifconfig | grep inet
-   
-   # Example: If your IP is 192.168.1.100, your network is likely 192.168.1.0/24
-   ```
 
+   
 3. **(Optional) Configure credentials with .env file**
    
    For production security, use a .env file instead of hardcoded values in docker-compose.yml:
@@ -170,7 +155,6 @@ The `docker-compose.yml` configures:
 - **netscan service**:
   - Builds from local Dockerfile (Go 1.25)
   - Uses `host` network mode for ICMP/SNMP access to your network
-  - Has `CAP_NET_RAW` capability for raw socket access (ICMP ping)
   - Mounts `config.yml` as read-only
   - Environment variables from .env file or defaults:
     - `INFLUXDB_TOKEN` (default: netscan-token)
