@@ -54,7 +54,7 @@ The easiest way to get netscan running is with Docker Compose, which sets up bot
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/extkljajicm/netscan.git
+   git clone https://github.com/kljama/netscan.git
    cd netscan
    ```
 
@@ -504,7 +504,7 @@ The new architecture uses four independent tickers:
 ### Local Development with Docker
 
 ```bash
-git clone https://github.com/extkljajicm/netscan.git
+git clone https://github.com/kljama/netscan.git
 cd netscan
 
 # Start InfluxDB for testing

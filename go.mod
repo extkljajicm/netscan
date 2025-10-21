@@ -1,4 +1,4 @@
-module github.com/extkljajicm/netscan
+module github.com/kljama/netscan
 
 go 1.25.1
 

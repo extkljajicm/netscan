@@ -103,7 +103,7 @@ Added comprehensive Docker documentation:
 
 ```bash
 # Clone the repository
-git clone https://github.com/extkljajicm/netscan.git
+git clone https://github.com/kljama/netscan.git
 cd netscan
 
 # Create config file from template
@@ -220,7 +220,7 @@ docker-compose -f docker-compose.netscan.yml down
 - Ensure volume mount syntax is correct: `-v $(pwd)/config.yml:/app/config.yml:ro`
 
 ### Image Pull Fails
-- Check if image exists: `docker pull ghcr.io/extkljajicm/netscan:latest`
+- Check if image exists: `docker pull ghcr.io/kljama/netscan:latest`
 - Verify internet connectivity
 - For private repos, authenticate: `docker login ghcr.io`
 

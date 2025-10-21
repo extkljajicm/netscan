@@ -26,7 +26,7 @@ sudo pacman -S go
 ### Setup
 
 ```bash
-git clone https://github.com/extkljajicm/netscan.git
+git clone https://github.com/kljama/netscan.git
 cd netscan
 go mod download
 ```

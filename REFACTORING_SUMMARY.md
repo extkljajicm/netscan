@@ -150,11 +150,11 @@ The `--icmp-only` flag has been removed. The new architecture automatically:
 **All Tests Pass:**
 ```bash
 $ go test ./...
-ok      github.com/extkljajicm/netscan/internal/config
-ok      github.com/extkljajicm/netscan/internal/discovery
-ok      github.com/extkljajicm/netscan/internal/influx
-ok      github.com/extkljajicm/netscan/internal/monitoring
-ok      github.com/extkljajicm/netscan/internal/state
+ok      github.com/kljama/netscan/internal/config
+ok      github.com/kljama/netscan/internal/discovery
+ok      github.com/kljama/netscan/internal/influx
+ok      github.com/kljama/netscan/internal/monitoring
+ok      github.com/kljama/netscan/internal/state
 ```
 
 **Manual Validation:**

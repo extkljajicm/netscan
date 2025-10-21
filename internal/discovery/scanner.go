@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/extkljajicm/netscan/internal/config"
-	"github.com/extkljajicm/netscan/internal/state"
+	"github.com/kljama/netscan/internal/config"
+	"github.com/kljama/netscan/internal/state"
 	"github.com/gosnmp/gosnmp"
 	probing "github.com/prometheus-community/pro-bing"
 )
