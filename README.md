@@ -31,7 +31,7 @@ The application uses a **multi-ticker architecture** with four independent, conc
 3. **Pinger Reconciliation Ticker** - Ensures all devices have active monitoring
 4. **State Pruning Ticker** - Removes devices not seen in 24 hours
 
-```
+```bash
 cmd/netscan/main.go           # Four-ticker orchestration and CLI interface
 internal/
 ├── config/config.go          # YAML parsing with SNMPDailySchedule support
@@ -53,12 +53,14 @@ The easiest way to get netscan running is with Docker Compose, which sets up bot
 ### Installation Steps
 
 1. **Clone the repository**
+
    ```bash
    git clone https://github.com/kljama/netscan.git
    cd netscan
    ```
 
 2. **Create and configure config.yml**
+
    ```bash
    # Copy the example configuration
    cp config.yml.example config.yml
@@ -66,18 +68,19 @@ The easiest way to get netscan running is with Docker Compose, which sets up bot
    # Edit the configuration with your actual network settings
    nano config.yml
    ```
-   
+
    **CRITICAL**: The example networks in config.yml.example (192.168.0.0/24, etc.):
+
    ```yaml
    networks:
      - "192.168.1.0/24"    # ✅ Use YOUR actual network range
      # - "10.0.0.0/16"     # ✅ Add more ranges if needed
    ```
 
-   
 3. **(Optional) Configure credentials with .env file**
-   
+
    For production security, use a .env file instead of hardcoded values in docker-compose.yml:
+
    ```bash
    # Copy the example .env file
    cp .env.example .env
@@ -85,21 +88,22 @@ The easiest way to get netscan running is with Docker Compose, which sets up bot
    # Edit with secure credentials
    nano .env
    ```
-   
+
    Update at minimum:
    - `INFLUXDB_TOKEN` - Use a strong random token
    - `DOCKER_INFLUXDB_INIT_PASSWORD` - Use a strong password
    - `SNMP_COMMUNITY` - Change from default 'public'
-   
+
    The .env file is in .gitignore and won't be committed to git.
-   
+
    **Note**: If you don't create a .env file, docker-compose.yml will use the default test values.
 
 4. **Start the stack**
+
    ```bash
    docker compose up -d
    ```
-   
+
    This will:
    - Build the netscan Docker image from the local Dockerfile
    - Start InfluxDB with persistent storage
@@ -107,6 +111,7 @@ The easiest way to get netscan running is with Docker Compose, which sets up bot
    - Use credentials from .env file if present, or defaults
 
 5. **Verify it's running**
+
    ```bash
    # Check container status
    docker compose ps
@@ -118,9 +123,9 @@ The easiest way to get netscan running is with Docker Compose, which sets up bot
    docker compose logs -f influxdb
    ```
 
-5. **Access InfluxDB UI** (optional)
-   
-   Open http://localhost:8086 in your browser
+6. **Access InfluxDB UI** (optional)
+
+   Open <http://localhost:8086> in your browser
    - Username: `admin`
    - Password: `admin123`
    - Organization: `test-org`
@@ -173,12 +178,14 @@ The `docker-compose.yml` configures:
 **Recommended: Use .env file** (more secure than editing docker-compose.yml):
 
 1. Create .env file from example:
+
    ```bash
    cp .env.example .env
    chmod 600 .env  # Restrict file permissions
    ```
 
 2. Edit .env with secure credentials:
+
    ```bash
    # Generate a secure token
    openssl rand -base64 32
@@ -191,6 +198,7 @@ The `docker-compose.yml` configures:
    ```
 
 3. Start with .env file:
+
    ```bash
    docker compose up -d
    ```
@@ -214,12 +222,14 @@ services:
 ```
 
 **Security Notes**:
+
 - .env file is in .gitignore and won't be committed
 - Always use strong, random tokens in production
 - Change default SNMP community from 'public'
 - Restrict .env file permissions: `chmod 600 .env`
 
 The config.yml file can remain unchanged - environment variables will be automatically expanded:
+
 ```yaml
 influxdb:
   url: "http://localhost:8086"
@@ -242,6 +252,7 @@ cp config.yml.example config.yml
 ```
 
 Edit the following key settings:
+
 - `networks`: Your network ranges (e.g., `192.168.1.0/24`)
 
 ### Configuration Structure
@@ -287,6 +298,7 @@ memory_limit_mb: 512
 ### Docker Environment
 
 The `docker-compose.yml` provides a complete stack with:
+
 - InfluxDB v2.7 for metrics storage
 - Organization: `test-org`
 - Bucket: `netscan`
@@ -335,6 +347,7 @@ docker build -t netscan:local .
 ### Docker Issues
 
 **Container is running but finding 0 devices:**
+
 ```bash
 # 1. VERIFY config.yml EXISTS in your directory
 ls -la config.yml
@@ -377,6 +390,7 @@ docker inspect netscan | grep -A 5 CapAdd
 ```
 
 **Container keeps restarting:**
+
 ```bash
 # Check logs for errors
 docker compose logs netscan
@@ -388,6 +402,7 @@ docker compose logs netscan
 ```
 
 **InfluxDB connection failed:**
+
 ```bash
 # Verify InfluxDB is healthy
 docker compose ps influxdb
@@ -401,6 +416,7 @@ curl http://localhost:8086/health
 ```
 
 **Can't access network devices:**
+
 ```bash
 # Verify host network mode is enabled
 docker inspect netscan | grep NetworkMode
@@ -412,12 +428,14 @@ docker inspect netscan | grep -A 5 CapAdd
 ### General Issues
 
 **No Devices Discovered:**
+
 - Verify network ranges in config.yml (e.g., `192.168.1.0/24`)
 - Check firewall rules for ICMP/SNMP
 - Confirm SNMP community string is correct
 - Test with ping manually: `ping <device-ip>`
 
 **Performance Issues:**
+
 - Start with lower worker counts (8 ICMP, 4 SNMP)
 - Monitor CPU usage with `htop` or `top`
 - Adjust based on network latency and CPU cores
@@ -425,6 +443,7 @@ docker inspect netscan | grep -A 5 CapAdd
 ## Performance Tuning
 
 **Default Configuration:**
+
 - ICMP Workers: 64 (lightweight, network-bound operations)
 - SNMP Workers: 32 (CPU-intensive protocol parsing)
 - Memory: ~50MB baseline + ~1KB per device
@@ -467,11 +486,13 @@ The new architecture uses four independent tickers:
    - Prevents memory growth from stale devices
 
 ### Concurrency Model
+
 - Producer-consumer pattern with buffered channels (256 slots)
 - Context-based cancellation for graceful shutdown
 - sync.WaitGroup for worker lifecycle management
 
 ### Metrics Storage
+
 - Measurement: "ping"
 - Tags: "ip", "hostname"
 - Fields: "rtt_ms" (float), "success" (boolean)
@@ -485,6 +506,7 @@ The new architecture uses four independent tickers:
 ### Security Model
 
 **Docker Deployment** (this PR):
+
 - **Runs as root user**: Required for ICMP raw socket access in containerized environments
 - **Why root is necessary**: Linux kernel security restrictions prevent non-root users from creating raw ICMP sockets in containers, even with CAP_NET_RAW capability
 - **Isolation maintained**: Container remains isolated from host through Docker's namespace isolation
@@ -493,6 +515,7 @@ The new architecture uses four independent tickers:
 - **Security trade-off**: Root access required for ping functionality, but container isolation provides security boundary
 
 **Native Deployment** (see [README_NATIVE.md](README_NATIVE.md)):
+
 - **Runs as dedicated service user**: Non-root `netscan` user created by deploy.sh
 - **No shell access**: Service user has `/bin/false` as shell for security
 - **CAP_NET_RAW via setcap**: Binary gets capability via setcap, no root required
@@ -527,7 +550,8 @@ go mod tidy     # Clean dependencies
 ```
 
 ### Project Structure
-```
+
+```bash
 netscan/
 ├── cmd/netscan/           # CLI application and main orchestration
 │   ├── main.go           # Service startup, signal handling, discovery loops

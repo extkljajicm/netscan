@@ -50,6 +50,7 @@ go build -o netscan ./cmd/netscan
 ### Cross-Platform Builds
 
 For custom platform builds, use Go's cross-compilation:
+
 ```bash
 GOOS=linux GOARCH=arm64 go build -o netscan-arm64 ./cmd/netscan
 GOOS=darwin GOARCH=amd64 go build -o netscan-macos ./cmd/netscan
@@ -68,6 +69,7 @@ Edit `config.yml` with your network settings.
 ### Security Features
 
 **Native Deployment Advantages (vs Docker)**:
+
 - **Non-root execution**: Runs as dedicated `netscan` service user (not root)
 - **No shell access**: Service user has `/bin/false` as shell for security
 - **CAP_NET_RAW via setcap**: Binary gets capability via setcap, no root required
@@ -75,6 +77,7 @@ Edit `config.yml` with your network settings.
 - **Preferred security model**: Avoids Docker containerization limitations that require root
 
 **General Security Features**:
+
 - **Environment Variables**: Sensitive values (tokens, passwords) can use environment variables with `${VAR_NAME}` syntax
 - **Secure .env File**: Deployment creates a separate `.env` file with restrictive permissions (600) for sensitive credentials
 - **Input Validation**: Configuration is validated at startup for security and sanity
@@ -101,6 +104,7 @@ SNMP_COMMUNITY=your-community           # SNMPv2c community string
 ```
 
 **Supported Environment Variables:**
+
 - `INFLUXDB_URL`: InfluxDB server endpoint
 - `INFLUXDB_TOKEN`: API token for authentication
 - `INFLUXDB_ORG`: Organization name
@@ -108,12 +112,14 @@ SNMP_COMMUNITY=your-community           # SNMPv2c community string
 - `SNMP_COMMUNITY`: SNMPv2c community string for device access
 
 **Security Best Practices:**
+
 - Never commit `.env` files to version control
 - Set restrictive permissions: `chmod 600 .env`
 - Rotate credentials regularly
 - Use strong, unique tokens for each environment
 
 **For Production:**
+
 - Generate unique, strong tokens for InfluxDB
 - Use different organizations per environment
 - Change SNMP community strings from defaults
@@ -168,6 +174,7 @@ sudo ./deploy.sh
 ```
 
 Creates:
+
 - `/opt/netscan/` with binary, config, and secure `.env` file
 - `netscan` user with minimal privileges
 - `CAP_NET_RAW` capability on binary
@@ -260,6 +267,7 @@ sudo systemctl disable netscan
 ```
 
 Runs the multi-ticker architecture with:
+
 - ICMP discovery every 5 minutes (configurable via `icmp_discovery_interval`)
 - Daily SNMP scan at configured time (e.g., 02:00)
 - Continuous monitoring of all discovered devices
@@ -289,6 +297,7 @@ go test -cover ./...             # Coverage report
 ```
 
 **Test Coverage:**
+
 - Configuration parsing and validation
 - Network discovery algorithms
 - State management concurrency
@@ -368,6 +377,7 @@ sudo ./undeploy.sh
 ```
 
 Removes:
+
 - Systemd service
 - Service user
 - Installation directory
@@ -410,6 +420,7 @@ ping_interval: "5s"            # Less frequent pings
 ```
 
 **Monitoring Resource Usage:**
+
 ```bash
 # CPU and memory
 htop
