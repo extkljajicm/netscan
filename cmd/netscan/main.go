@@ -11,11 +11,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/extkljajicm/netscan/internal/config"
-	"github.com/extkljajicm/netscan/internal/discovery"
-	"github.com/extkljajicm/netscan/internal/influx"
-	"github.com/extkljajicm/netscan/internal/monitoring"
-	"github.com/extkljajicm/netscan/internal/state"
+	"github.com/kljama/netscan/internal/config"
+	"github.com/kljama/netscan/internal/discovery"
+	"github.com/kljama/netscan/internal/influx"
+	"github.com/kljama/netscan/internal/monitoring"
+	"github.com/kljama/netscan/internal/state"
 )
 
 func main() {
