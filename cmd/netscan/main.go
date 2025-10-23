@@ -11,11 +11,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/extkljajicm/netscan/internal/config"
-	"github.com/extkljajicm/netscan/internal/discovery"
-	"github.com/extkljajicm/netscan/internal/influx"
-	"github.com/extkljajicm/netscan/internal/monitoring"
-	"github.com/extkljajicm/netscan/internal/state"
+	"github.com/kljama/netscan/internal/config"
+	"github.com/kljama/netscan/internal/discovery"
+	"github.com/kljama/netscan/internal/influx"
+	"github.com/kljama/netscan/internal/monitoring"
+	"github.com/kljama/netscan/internal/state"
 )
 
 func main() {
@@ -97,6 +97,7 @@ func main() {
 
 	// Run initial ICMP discovery at startup
 	log.Println("Starting ICMP discovery scan...")
+	log.Printf("Scanning networks: %v", cfg.Networks)
 	responsiveIPs := discovery.RunICMPSweep(cfg.Networks, cfg.IcmpWorkers)
 	log.Printf("ICMP discovery found %d online devices", len(responsiveIPs))
 	
@@ -169,6 +170,7 @@ func main() {
 			// ICMP Discovery: Find new devices
 			checkMemoryUsage()
 			log.Println("Starting ICMP discovery scan...")
+			log.Printf("Scanning networks: %v", cfg.Networks)
 			responsiveIPs := discovery.RunICMPSweep(cfg.Networks, cfg.IcmpWorkers)
 			log.Printf("ICMP discovery found %d online devices", len(responsiveIPs))
 			

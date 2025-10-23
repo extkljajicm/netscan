@@ -1,15 +1,21 @@
 # config.yml.example - netscan network monitoring configuration
 #
-# SECURITY NOTE: Sensitive credentials are loaded from a separate .env file
-# for enhanced security. The .env file is created during deployment with
-# restrictive permissions (600) and contains default test values that match
-# docker-compose.yml. For production use, update the .env file with secure
-# credentials.
+# DOCKER DEPLOYMENT:
+# When using Docker Compose, environment variables are automatically provided
+# by docker-compose.yml. Simply copy this file as-is:
+#   cp config.yml.example config.yml
 #
-# Required environment variables in .env file:
-# - INFLUXDB_TOKEN=netscan-token (default for testing)
-# - INFLUXDB_ORG=test-org (default for testing)
-# - SNMP_COMMUNITY=public (default for testing - change for production security)
+# Environment variables provided by docker-compose.yml (defaults):
+# - INFLUXDB_TOKEN=netscan-token
+# - INFLUXDB_ORG=test-org
+# - SNMP_COMMUNITY=public
+#
+# For production, customize these in the docker-compose.yml 'environment' section.
+#
+# NATIVE DEPLOYMENT:
+# For native/systemd deployment, create a .env file with these variables
+# or replace ${VAR_NAME} placeholders with actual values.
+# See README_NATIVE.md for details.
 #
 # DO NOT store actual credentials in this config.yml file!
 
@@ -17,10 +23,20 @@
 # NETWORK DISCOVERY SETTINGS
 # =============================================================================
 # Network ranges to scan (CIDR notation) - supports multiple subnets
+#
+# ⚠️  IMPORTANT: You MUST update these with your actual network ranges!
+# The example ranges below are placeholders and likely won't match your network.
+# If netscan finds 0 devices, it means these ranges are incorrect.
+#
+# How to find your network range:
+# - Run: ip addr (Linux) or ipconfig (Windows)
+# - Look for your IP address (e.g., 192.168.1.100)
+# - Use the network portion with /24 (e.g., 192.168.1.0/24)
+#
 networks:
-  - "192.168.0.0/24"
-  - "10.0.0.0/16"
-  - "172.16.0.0/12"
+  - "192.168.0.0/24"   # ⚠️ EXAMPLE - Replace with your actual network!
+  - "10.0.0.0/16"      # ⚠️ EXAMPLE - Remove if not using this range
+  - "172.16.0.0/12"    # ⚠️ EXAMPLE - Remove if not using this range
 
 # How often to run ICMP discovery to find new devices
 icmp_discovery_interval: "5m"
@@ -34,9 +50,9 @@ snmp_daily_schedule: "02:00"
 # SNMP SETTINGS
 # =============================================================================
 # SNMPv2c community string for device authentication
-# Sensitive values are loaded from .env file (see Environment Variables section)
+# Uses environment variable expansion (Docker: docker-compose.yml, Native: .env file)
 snmp:
-  community: "${SNMP_COMMUNITY}"  # Loaded from .env file - default is 'public' for testing
+  community: "${SNMP_COMMUNITY}"  # Default: 'public' (set via docker-compose.yml or .env)
   port: 161
   timeout: "5s"
   retries: 1
@@ -63,11 +79,11 @@ snmp_workers: 32
 # INFLUXDB SETTINGS
 # =============================================================================
 # Time-series database for metrics storage
-# Sensitive values are loaded from .env file (see Environment Variables section)
+# Uses environment variable expansion (Docker: docker-compose.yml, Native: .env file)
 influxdb:
   url: "http://localhost:8086"
-  token: "${INFLUXDB_TOKEN}"  # Loaded from .env file
-  org: "${INFLUXDB_ORG}"      # Loaded from .env file
+  token: "${INFLUXDB_TOKEN}"  # Default: 'netscan-token' (set via docker-compose.yml or .env)
+  org: "${INFLUXDB_ORG}"      # Default: 'test-org' (set via docker-compose.yml or .env)
   bucket: "netscan"
 
 # =============================================================================

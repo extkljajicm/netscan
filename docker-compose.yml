@@ -1,19 +1,60 @@
-version: '3.8'
 services:
+  # netscan service - network monitoring application
+  netscan:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: netscan
+    restart: unless-stopped
+    
+    # Network mode: host allows netscan to access the host network for ICMP and SNMP
+    network_mode: host
+    
+    # Add Linux capability for raw socket access (ICMP ping)
+    cap_add:
+      - NET_RAW
+    
+    # Mount config file
+    # IMPORTANT: You must create config.yml first with: cp config.yml.example config.yml
+    # The config.yml file should exist in the same directory as docker-compose.yml
+    volumes:
+      - ./config.yml:/app/config.yml:ro
+    
+    # Environment variables for config.yml expansion
+    # For production: Create a .env file with these variables to avoid storing credentials here
+    # See README.md for details on using .env file
+    environment:
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN:-netscan-token}
+      - INFLUXDB_ORG=${INFLUXDB_ORG:-test-org}
+      - SNMP_COMMUNITY=${SNMP_COMMUNITY:-public}
+    
+    # Ensure InfluxDB is started first
+    depends_on:
+      influxdb:
+        condition: service_healthy
+
+  # InfluxDB service for metrics storage
   influxdb:
     image: influxdb:2.7
     container_name: influxdbv2
     ports:
       - "8086:8086"
     environment:
-      - DOCKER_INFLUXDB_INIT_MODE=setup
-      - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=admin123
-      - DOCKER_INFLUXDB_INIT_ORG=test-org
-      - DOCKER_INFLUXDB_INIT_BUCKET=netscan
-      - DOCKER_INFLUXDB_INIT_RETENTION=1w
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=netscan-token
+      - DOCKER_INFLUXDB_INIT_MODE=${DOCKER_INFLUXDB_INIT_MODE:-setup}
+      - DOCKER_INFLUXDB_INIT_USERNAME=${DOCKER_INFLUXDB_INIT_USERNAME:-admin}
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${DOCKER_INFLUXDB_INIT_PASSWORD:-admin123}
+      - DOCKER_INFLUXDB_INIT_ORG=${DOCKER_INFLUXDB_INIT_ORG:-test-org}
+      - DOCKER_INFLUXDB_INIT_BUCKET=${DOCKER_INFLUXDB_INIT_BUCKET:-netscan}
+      - DOCKER_INFLUXDB_INIT_RETENTION=${DOCKER_INFLUXDB_INIT_RETENTION:-1w}
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${DOCKER_INFLUXDB_INIT_ADMIN_TOKEN:-netscan-token}
     volumes:
       - influxdbv2-data:/var/lib/influxdb2
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
 volumes:
   influxdbv2-data:

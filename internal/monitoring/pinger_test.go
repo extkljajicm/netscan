@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/extkljajicm/netscan/internal/state"
+	"github.com/kljama/netscan/internal/state"
 )
 
 type mockWriter struct {
