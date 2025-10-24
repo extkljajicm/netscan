@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Summary
 
-netscan is a production-grade Go network monitoring service (Go 1.25+) targeting linux-amd64 exclusively. The application implements a decoupled, multi-ticker architecture for efficient network device discovery and continuous monitoring.
+netscan is a Go network monitoring service (Go 1.25+) targeting linux-amd64 exclusively. The application implements a decoupled, multi-ticker architecture for efficient network device discovery and continuous monitoring.
 
 ### Core Features
 
@@ -36,9 +36,8 @@ netscan is a production-grade Go network monitoring service (Go 1.25+) targeting
 
 **Data Persistence**
 - InfluxDB v2 time-series metrics storage
-- High-performance batching system (default: 100 points per batch, 5s flush interval)
+- Batching system (default: 100 points per batch, 5s flush interval)
 - Background flusher goroutine with graceful shutdown
-- 99% reduction in database requests vs. unbatched writes
 - Data sanitization and validation before writes
 - Health check on startup (fail-fast if InfluxDB unavailable)
 
@@ -46,19 +45,17 @@ netscan is a production-grade Go network monitoring service (Go 1.25+) targeting
 - HTTP health check server (default port: 8080)
 - Three endpoints: /health (detailed JSON), /health/ready (readiness), /health/live (liveness)
 - Docker HEALTHCHECK directive integration
-- Kubernetes probe support
 - Health metrics: device count, active pingers, InfluxDB stats, memory, goroutines, uptime
 
 **Logging**
-- Structured logging with zerolog (zero-allocation performance)
-- Machine-parseable JSON logs for production
+- Structured logging with zerolog
+- Machine-parseable JSON logs
 - Colored console output for development
 - Context-rich logging: IP addresses, device counts, durations, errors
 - Log levels: Fatal, Error, Warn, Info, Debug
 
 **Testing & Quality**
-- Comprehensive test suite covering orchestration logic (11 test functions, 1 benchmark)
-- 527 lines of integration tests for ticker lifecycle, shutdown, reconciliation
+- Comprehensive test suite covering orchestration logic
 - Race detection clean: all tests pass with -race flag
 - Unit tests for all packages
 - Performance benchmarks for regression detection
