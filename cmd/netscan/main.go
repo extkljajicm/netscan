@@ -143,7 +143,7 @@ func main() {
 				snmpDevices := discovery.RunSNMPScan([]string{newIP}, &cfg.SNMP, cfg.SnmpWorkers)
 				if len(snmpDevices) > 0 {
 					dev := snmpDevices[0]
-					stateMgr.UpdateDeviceSNMP(dev.IP, dev.Hostname, dev.SysDescr, dev.SysObjectID)
+					stateMgr.UpdateDeviceSNMP(dev.IP, dev.Hostname, dev.SysDescr)
 					// Write device info to InfluxDB
 					if err := writer.WriteDeviceInfo(dev.IP, dev.Hostname, dev.SysDescr); err != nil {
 						log.Error().
@@ -241,7 +241,7 @@ func main() {
 						snmpDevices := discovery.RunSNMPScan([]string{newIP}, &cfg.SNMP, cfg.SnmpWorkers)
 						if len(snmpDevices) > 0 {
 							dev := snmpDevices[0]
-							stateMgr.UpdateDeviceSNMP(dev.IP, dev.Hostname, dev.SysDescr, dev.SysObjectID)
+							stateMgr.UpdateDeviceSNMP(dev.IP, dev.Hostname, dev.SysDescr)
 							// Write device info to InfluxDB
 							if err := writer.WriteDeviceInfo(dev.IP, dev.Hostname, dev.SysDescr); err != nil {
 								log.Error().
@@ -274,7 +274,7 @@ func main() {
 			
 			successCount := 0
 			for _, dev := range snmpDevices {
-				stateMgr.UpdateDeviceSNMP(dev.IP, dev.Hostname, dev.SysDescr, dev.SysObjectID)
+				stateMgr.UpdateDeviceSNMP(dev.IP, dev.Hostname, dev.SysDescr)
 				// Write device info to InfluxDB
 				if err := writer.WriteDeviceInfo(dev.IP, dev.Hostname, dev.SysDescr); err != nil {
 					log.Error().

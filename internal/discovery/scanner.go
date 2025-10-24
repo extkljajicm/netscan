@@ -221,11 +221,11 @@ func RunSNMPScan(ips []string, snmpConfig *config.SNMPConfig, workers int) []sta
 					Msg("SNMP connection failed")
 				continue
 			}
-			// Query standard MIB-II system OIDs: sysName, sysDescr, sysObjectID
-			oids := []string{"1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.2.0"}
+			// Query standard MIB-II system OIDs: sysName, sysDescr
+			oids := []string{"1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.1.0"}
 			resp, err := snmpGetWithFallback(params, oids)
 			params.Conn.Close()
-			if err != nil || len(resp.Variables) < 3 {
+			if err != nil || len(resp.Variables) < 2 {
 				// SNMP query failed, skip this device
 				log.Debug().
 					Str("ip", ip).
@@ -251,21 +251,12 @@ func RunSNMPScan(ips []string, snmpConfig *config.SNMPConfig, workers int) []sta
 					Msg("Invalid sysDescr")
 				continue
 			}
-			sysObjectID, err := validateSNMPString(resp.Variables[2].Value, "sysObjectID")
-			if err != nil {
-				log.Debug().
-					Str("ip", ip).
-					Err(err).
-					Msg("Invalid sysObjectID")
-				continue
-			}
 
 			dev := state.Device{
-				IP:          ip,
-				Hostname:    hostname,
-				SysDescr:    sysDescr,
-				SysObjectID: sysObjectID,
-				LastSeen:    time.Now(),
+				IP:       ip,
+				Hostname: hostname,
+				SysDescr: sysDescr,
+				LastSeen: time.Now(),
 			}
 			results <- dev
 		}
@@ -350,11 +341,11 @@ func RunScan(cfg *config.Config) []state.Device {
 			if err := params.Connect(); err != nil {
 				continue // Skip unresponsive devices
 			}
-			// Query standard MIB-II system OIDs: sysName, sysDescr, sysObjectID
-			oids := []string{"1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.2.0"}
+			// Query standard MIB-II system OIDs: sysName, sysDescr
+			oids := []string{"1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.1.0"}
 			resp, err := snmpGetWithFallback(params, oids)
 			params.Conn.Close()
-			if err != nil || len(resp.Variables) < 3 {
+			if err != nil || len(resp.Variables) < 2 {
 				continue // Skip devices with incomplete SNMP responses
 			}
 
@@ -367,17 +358,12 @@ func RunScan(cfg *config.Config) []state.Device {
 			if err != nil {
 				continue // Skip devices with invalid description data
 			}
-			sysObjectID, err := validateSNMPString(resp.Variables[2].Value, "sysObjectID")
-			if err != nil {
-				continue // Skip devices with invalid OID data
-			}
 
 			dev := state.Device{
-				IP:          ip,
-				Hostname:    hostname,
-				SysDescr:    sysDescr,
-				SysObjectID: sysObjectID,
-				LastSeen:    time.Now(),
+				IP:       ip,
+				Hostname: hostname,
+				SysDescr: sysDescr,
+				LastSeen: time.Now(),
 			}
 			results <- dev
 		}
@@ -551,26 +537,24 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 			if err := params.Connect(); err != nil {
 				// SNMP failed, but device is online (from ICMP), so add basic device info
 				results <- state.Device{
-					IP:          ip,
-					Hostname:    ip, // Use IP as hostname for non-SNMP devices
-					SysDescr:    "ICMP-responsive device (SNMP unavailable)",
-					SysObjectID: "",
-					LastSeen:    time.Now(),
+					IP:       ip,
+					Hostname: ip, // Use IP as hostname for non-SNMP devices
+					SysDescr: "ICMP-responsive device (SNMP unavailable)",
+					LastSeen: time.Now(),
 				}
 				continue
 			}
-			// Query standard MIB-II system OIDs: sysName, sysDescr, sysObjectID
-			oids := []string{"1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.2.0"}
+			// Query standard MIB-II system OIDs: sysName, sysDescr
+			oids := []string{"1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.1.0"}
 			resp, err := snmpGetWithFallback(params, oids)
 			params.Conn.Close()
-			if err != nil || len(resp.Variables) < 3 {
+			if err != nil || len(resp.Variables) < 2 {
 				// SNMP query failed, but device is online
 				results <- state.Device{
-					IP:          ip,
-					Hostname:    ip,
-					SysDescr:    "ICMP-responsive device (SNMP query failed)",
-					SysObjectID: "",
-					LastSeen:    time.Now(),
+					IP:       ip,
+					Hostname: ip,
+					SysDescr: "ICMP-responsive device (SNMP query failed)",
+					LastSeen: time.Now(),
 				}
 				continue
 			}
@@ -584,17 +568,12 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 			if err != nil {
 				continue // Skip devices with invalid description data
 			}
-			sysObjectID, err := validateSNMPString(resp.Variables[2].Value, "sysObjectID")
-			if err != nil {
-				continue // Skip devices with invalid OID data
-			}
 
 			dev := state.Device{
-				IP:          ip,
-				Hostname:    hostname,
-				SysDescr:    sysDescr,
-				SysObjectID: sysObjectID,
-				LastSeen:    time.Now(),
+				IP:       ip,
+				Hostname: hostname,
+				SysDescr: sysDescr,
+				LastSeen: time.Now(),
 			}
 			results <- dev
 		}
