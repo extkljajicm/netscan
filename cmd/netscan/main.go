@@ -57,6 +57,12 @@ func main() {
 	}
 	log.Printf("InfluxDB connection successful ✓ (batch_size: %d, flush_interval: %v)", cfg.InfluxDB.BatchSize, cfg.InfluxDB.FlushInterval)
 
+	// Start health check endpoint
+	healthServer := NewHealthServer(cfg.HealthCheckPort, stateMgr, writer)
+	if err := healthServer.Start(); err != nil {
+		log.Printf("Warning: Health check server failed to start: %v", err)
+	}
+
 	// Map IP addresses to their pinger cancellation functions
 	// CRITICAL: Protected by mutex to prevent concurrent map access
 	activePingers := make(map[string]context.CancelFunc)

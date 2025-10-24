@@ -173,3 +173,10 @@ func (m *Manager) Prune(olderThan time.Duration) []Device {
 func (m *Manager) PruneStale(olderThan time.Duration) []Device {
 	return m.Prune(olderThan)
 }
+
+// Count returns the current number of managed devices
+func (m *Manager) Count() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.devices)
+}

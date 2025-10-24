@@ -41,6 +41,7 @@ type Config struct {
 	PingTimeout           time.Duration  `yaml:"ping_timeout"`
 	InfluxDB              InfluxDBConfig `yaml:"influxdb"`
 	SNMPDailySchedule     string         `yaml:"snmp_daily_schedule"` // Daily SNMP scan time (HH:MM format)
+	HealthCheckPort       int            `yaml:"health_check_port"`   // HTTP health check endpoint port
 	// Resource protection settings
 	MaxConcurrentPingers int           `yaml:"max_concurrent_pingers"`
 	MaxDevices           int           `yaml:"max_devices"`
@@ -75,6 +76,7 @@ func LoadConfig(path string) (*Config, error) {
 			FlushInterval string `yaml:"flush_interval"`
 		} `yaml:"influxdb"`
 		SNMPDailySchedule     string `yaml:"snmp_daily_schedule"`
+		HealthCheckPort       int    `yaml:"health_check_port"`
 		// Resource protection settings
 		MaxConcurrentPingers int    `yaml:"max_concurrent_pingers"`
 		MaxDevices           int    `yaml:"max_devices"`
@@ -162,6 +164,10 @@ func LoadConfig(path string) (*Config, error) {
 	if flushInterval == 0 {
 		flushInterval = 5 * time.Second // Default: flush every 5 seconds
 	}
+	// Set health check port default
+	if raw.HealthCheckPort == 0 {
+		raw.HealthCheckPort = 8080 // Default: port 8080 for health checks
+	}
 
 	// Apply environment variable expansion to sensitive fields
 	raw.InfluxDB.URL = expandEnv(raw.InfluxDB.URL)
@@ -188,6 +194,7 @@ func LoadConfig(path string) (*Config, error) {
 			FlushInterval: flushInterval,
 		},
 		SNMPDailySchedule:     raw.SNMPDailySchedule,
+		HealthCheckPort:       raw.HealthCheckPort,
 		MaxConcurrentPingers:  raw.MaxConcurrentPingers,
 		MaxDevices:            raw.MaxDevices,
 		MinScanInterval:       minScanInterval,

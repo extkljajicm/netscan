@@ -89,6 +89,13 @@ influxdb:
   flush_interval: "5s"        # Maximum time to hold points before flushing (default: 5s)
 
 # =============================================================================
+# HEALTH CHECK ENDPOINT
+# =============================================================================
+# HTTP endpoint for monitoring and Docker HEALTHCHECK
+health_check_port: 8080       # Port for health check endpoint (default: 8080)
+                              # Provides /health, /health/ready, /health/live endpoints
+
+# =============================================================================
 # RESOURCE PROTECTION SETTINGS
 # =============================================================================
 # Limits to prevent resource exhaustion and DoS attacks
