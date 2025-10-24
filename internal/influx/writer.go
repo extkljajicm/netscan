@@ -3,15 +3,15 @@ package influx
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 	"github.com/influxdata/influxdb-client-go/v2/api"
 	"github.com/influxdata/influxdb-client-go/v2/api/write"
+	"github.com/rs/zerolog/log"
 )
 
 // Writer handles InfluxDB v2 time-series data writes with batching
@@ -21,13 +21,16 @@ type Writer struct {
 	org      string           // InfluxDB organization name
 	bucket   string           // InfluxDB bucket name
 
-	// Batching fields
-	batchMu     sync.Mutex
-	batch       []*write.Point
+	// Batching fields - using channel for lock-free operation
+	batchChan   chan *write.Point
 	batchSize   int
 	flushTicker *time.Ticker
 	ctx         context.Context
 	cancel      context.CancelFunc
+
+	// Metrics tracking with atomic counters
+	successfulBatches atomic.Uint64
+	failedBatches     atomic.Uint64
 }
 
 // NewWriter creates a new InfluxDB writer with batching support
@@ -42,7 +45,7 @@ func NewWriter(url, token, org, bucket string, batchSize int, flushInterval time
 		writeAPI:    writeAPI,
 		org:         org,
 		bucket:      bucket,
-		batch:       make([]*write.Point, 0, batchSize),
+		batchChan:   make(chan *write.Point, batchSize*2), // Buffered channel for lock-free writes
 		batchSize:   batchSize,
 		flushTicker: time.NewTicker(flushInterval),
 		ctx:         ctx,
@@ -57,13 +60,90 @@ func NewWriter(url, token, org, bucket string, batchSize int, flushInterval time
 
 // backgroundFlusher periodically flushes batched points
 func (w *Writer) backgroundFlusher() {
+	// Panic recovery for background goroutine
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().
+				Interface("panic", r).
+				Msg("Background flusher panic recovered")
+		}
+	}()
+
+	// Start error monitoring goroutine
+	go w.monitorWriteErrors()
+
+	// Local batch for accumulating points
+	batch := make([]*write.Point, 0, w.batchSize)
+
 	for {
 		select {
 		case <-w.ctx.Done():
-			w.flush() // Final flush on shutdown
+			// Drain remaining points from channel before shutdown
+			w.drainAndFlush(batch)
 			return
+
 		case <-w.flushTicker.C:
-			w.flush()
+			// Time-based flush
+			if len(batch) > 0 {
+				w.flushBatch(batch)
+				batch = make([]*write.Point, 0, w.batchSize)
+			}
+
+		case point := <-w.batchChan:
+			// Accumulate point
+			batch = append(batch, point)
+			
+			// Flush when batch is full
+			if len(batch) >= w.batchSize {
+				w.flushBatch(batch)
+				batch = make([]*write.Point, 0, w.batchSize)
+			}
+		}
+	}
+}
+
+// drainAndFlush drains all remaining points from channel and flushes them
+func (w *Writer) drainAndFlush(currentBatch []*write.Point) {
+	// Collect any remaining points in current batch
+	batch := currentBatch
+
+	// Drain the channel
+	for {
+		select {
+		case point := <-w.batchChan:
+			batch = append(batch, point)
+		default:
+			// Channel is empty
+			if len(batch) > 0 {
+				w.flushBatch(batch)
+			}
+			return
+		}
+	}
+}
+
+// monitorWriteErrors monitors the write API error channel and logs errors
+func (w *Writer) monitorWriteErrors() {
+	// Panic recovery for error monitor goroutine
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().
+				Interface("panic", r).
+				Msg("Write error monitor panic recovered")
+		}
+	}()
+
+	errorChan := w.writeAPI.Errors()
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case err := <-errorChan:
+			if err != nil {
+				log.Error().
+					Err(err).
+					Msg("InfluxDB write error detected")
+			}
 		}
 	}
 }
@@ -140,43 +220,93 @@ func (w *Writer) WritePingResult(ip string, rtt time.Duration, successful bool) 
 	return nil
 }
 
-// addToBatch adds a point to the batch and flushes if batch is full
+// addToBatch adds a point to the batch channel (lock-free operation)
 func (w *Writer) addToBatch(point *write.Point) {
-	w.batchMu.Lock()
-	w.batch = append(w.batch, point)
-	shouldFlush := len(w.batch) >= w.batchSize
-	w.batchMu.Unlock()
-
-	if shouldFlush {
-		w.flush()
+	select {
+	case w.batchChan <- point:
+		// Point added successfully
+	case <-w.ctx.Done():
+		// Context cancelled, drop point
+	default:
+		// Channel full, log warning but don't block
+		log.Warn().Msg("Batch channel full, dropping point to avoid blocking")
 	}
 }
 
-// flush writes all batched points to InfluxDB
-func (w *Writer) flush() {
-	w.batchMu.Lock()
-	if len(w.batch) == 0 {
-		w.batchMu.Unlock()
+// flushBatch writes a batch of points to InfluxDB with retry logic
+func (w *Writer) flushBatch(points []*write.Point) {
+	if len(points) == 0 {
 		return
 	}
 
-	pointsToWrite := w.batch
-	w.batch = make([]*write.Point, 0, w.batchSize)
-	w.batchMu.Unlock()
+	// Write batch to InfluxDB with retry on failure
+	w.flushWithRetry(points, 3)
+}
 
-	// Write batch to InfluxDB
-	for _, point := range pointsToWrite {
-		w.writeAPI.WritePoint(point)
+// flushWithRetry attempts to write points with exponential backoff retry
+func (w *Writer) flushWithRetry(points []*write.Point, maxRetries int) {
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// Write all points in the batch
+		for _, point := range points {
+			w.writeAPI.WritePoint(point)
+		}
+
+		// Force a flush to check for immediate errors
+		w.writeAPI.Flush()
+
+		// Wait a short time to see if errors appear
+		time.Sleep(100 * time.Millisecond)
+
+		// Check error channel with timeout
+		select {
+		case err := <-w.writeAPI.Errors():
+			if err != nil {
+				if attempt < maxRetries {
+					backoffDuration := time.Duration(1<<uint(attempt)) * time.Second
+					log.Warn().
+						Err(err).
+						Int("attempt", attempt+1).
+						Int("max_retries", maxRetries).
+						Dur("backoff", backoffDuration).
+						Msg("InfluxDB write failed, retrying with backoff")
+					time.Sleep(backoffDuration)
+					continue
+				} else {
+					// Final failure - increment failed counter
+					w.failedBatches.Add(1)
+					log.Error().
+						Err(err).
+						Int("points", len(points)).
+						Msg("InfluxDB write failed after all retries")
+					return
+				}
+			}
+		default:
+			// No error, write successful - increment success counter
+			w.successfulBatches.Add(1)
+			log.Info().
+				Int("points", len(points)).
+				Msg("Successfully flushed points to InfluxDB")
+			return
+		}
 	}
+}
 
-	log.Printf("Flushed %d points to InfluxDB", len(pointsToWrite))
+// GetSuccessfulBatches returns the number of successfully flushed batches
+func (w *Writer) GetSuccessfulBatches() uint64 {
+	return w.successfulBatches.Load()
+}
+
+// GetFailedBatches returns the number of failed batch flush attempts
+func (w *Writer) GetFailedBatches() uint64 {
+	return w.failedBatches.Load()
 }
 
 // Close terminates the InfluxDB client connection
 func (w *Writer) Close() {
-	w.cancel()           // Stop background flusher
+	w.cancel()           // Stop background flusher (which will drain remaining points)
 	w.flushTicker.Stop() // Stop flush ticker
-	w.flush()            // Final flush
+	time.Sleep(100 * time.Millisecond) // Give background flusher time to finish
 	w.writeAPI.Flush()   // Flush write API buffer
 	w.client.Close()
 }

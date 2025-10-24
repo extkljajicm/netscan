@@ -2,7 +2,6 @@ package discovery
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"strings"
 	"sync"
@@ -12,6 +11,7 @@ import (
 	"github.com/kljama/netscan/internal/state"
 	"github.com/gosnmp/gosnmp"
 	probing "github.com/prometheus-community/pro-bing"
+	"github.com/rs/zerolog/log"
 )
 
 // RunScanIPsOnly returns all IP addresses in the specified CIDR range
@@ -34,18 +34,33 @@ func RunICMPSweep(networks []string, workers int) []string {
 
 	// Worker goroutine for ICMP ping probes
 	worker := func() {
+		// Panic recovery for worker goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("ICMP worker panic recovered")
+			}
+		}()
+
 		defer wg.Done()
 		for ip := range jobs {
 			pinger, err := probing.NewPinger(ip)
 			if err != nil {
-				log.Printf("Failed to create pinger for %s: %v", ip, err)
+				log.Debug().
+					Str("ip", ip).
+					Err(err).
+					Msg("Failed to create pinger")
 				continue // Skip invalid IP addresses
 			}
 			pinger.Count = 1                 // Single ping per device
 			pinger.Timeout = 1 * time.Second // 1-second discovery timeout
 			pinger.SetPrivileged(true)       // Use raw sockets for ICMP
 			if err := pinger.Run(); err != nil {
-				log.Printf("Ping failed for %s: %v", ip, err)
+				log.Debug().
+					Str("ip", ip).
+					Err(err).
+					Msg("Ping failed")
 				continue // Skip ping failures
 			}
 			stats := pinger.Statistics()
@@ -63,17 +78,33 @@ func RunICMPSweep(networks []string, workers int) []string {
 
 	// Producer: enqueue all IPs from all CIDR ranges
 	go func() {
-		for _, network := range networks {
-			ips := ipsFromCIDR(network)
-			for _, ip := range ips {
-				jobs <- ip
+		// Panic recovery for producer goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("ICMP producer panic recovered")
 			}
+		}()
+
+		for _, network := range networks {
+			// Stream IPs directly to jobs channel without intermediate array
+			streamIPsFromCIDR(network, jobs)
 		}
 		close(jobs)
 	}()
 
 	// Wait for all workers to complete, then close results channel
 	go func() {
+		// Panic recovery for wait goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("ICMP wait goroutine panic recovered")
+			}
+		}()
+
 		wg.Wait()
 		close(results)
 	}()
@@ -103,7 +134,9 @@ func snmpGetWithFallback(params *gosnmp.GoSNMP, oids []string) (*gosnmp.SnmpPack
 			return resp, nil
 		}
 		// All variables returned NoSuchInstance/NoSuchObject, try GetNext
-		log.Printf("Get returned NoSuchInstance for %s, trying GetNext fallback", params.Target)
+		log.Debug().
+			Str("target", params.Target).
+			Msg("Get returned NoSuchInstance, trying GetNext fallback")
 	}
 
 	// Fallback to GetNext for each OID (works when .0 instance doesn't exist)
@@ -158,6 +191,15 @@ func RunSNMPScan(ips []string, snmpConfig *config.SNMPConfig, workers int) []sta
 
 	// Worker goroutine for SNMP queries
 	worker := func() {
+		// Panic recovery for worker goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("SNMP worker panic recovered")
+			}
+		}()
+
 		defer wg.Done()
 		for ip := range jobs {
 			// Configure SNMP connection parameters
@@ -171,42 +213,48 @@ func RunSNMPScan(ips []string, snmpConfig *config.SNMPConfig, workers int) []sta
 			}
 			if err := params.Connect(); err != nil {
 				// SNMP failed, skip this device
-				log.Printf("SNMP connection failed for %s: %v", ip, err)
+				log.Debug().
+					Str("ip", ip).
+					Err(err).
+					Msg("SNMP connection failed")
 				continue
 			}
-			// Query standard MIB-II system OIDs: sysName, sysDescr, sysObjectID
-			oids := []string{"1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.2.0"}
+			// Query standard MIB-II system OIDs: sysName, sysDescr
+			oids := []string{"1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.1.0"}
 			resp, err := snmpGetWithFallback(params, oids)
 			params.Conn.Close()
-			if err != nil || len(resp.Variables) < 3 {
+			if err != nil || len(resp.Variables) < 2 {
 				// SNMP query failed, skip this device
-				log.Printf("SNMP query failed for %s: %v", ip, err)
+				log.Debug().
+					Str("ip", ip).
+					Err(err).
+					Msg("SNMP query failed")
 				continue
 			}
 
 			// Validate and sanitize SNMP response data
 			hostname, err := validateSNMPString(resp.Variables[0].Value, "sysName")
 			if err != nil {
-				log.Printf("Invalid sysName for %s: %v", ip, err)
+				log.Debug().
+					Str("ip", ip).
+					Err(err).
+					Msg("Invalid sysName")
 				continue
 			}
 			sysDescr, err := validateSNMPString(resp.Variables[1].Value, "sysDescr")
 			if err != nil {
-				log.Printf("Invalid sysDescr for %s: %v", ip, err)
-				continue
-			}
-			sysObjectID, err := validateSNMPString(resp.Variables[2].Value, "sysObjectID")
-			if err != nil {
-				log.Printf("Invalid sysObjectID for %s: %v", ip, err)
+				log.Debug().
+					Str("ip", ip).
+					Err(err).
+					Msg("Invalid sysDescr")
 				continue
 			}
 
 			dev := state.Device{
-				IP:          ip,
-				Hostname:    hostname,
-				SysDescr:    sysDescr,
-				SysObjectID: sysObjectID,
-				LastSeen:    time.Now(),
+				IP:       ip,
+				Hostname: hostname,
+				SysDescr: sysDescr,
+				LastSeen: time.Now(),
 			}
 			results <- dev
 		}
@@ -220,6 +268,15 @@ func RunSNMPScan(ips []string, snmpConfig *config.SNMPConfig, workers int) []sta
 
 	// Producer: enqueue all IPs
 	go func() {
+		// Panic recovery for producer goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("SNMP producer panic recovered")
+			}
+		}()
+
 		for _, ip := range ips {
 			jobs <- ip
 		}
@@ -228,6 +285,15 @@ func RunSNMPScan(ips []string, snmpConfig *config.SNMPConfig, workers int) []sta
 
 	// Wait for all workers to complete, then close results channel
 	go func() {
+		// Panic recovery for wait goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("SNMP wait goroutine panic recovered")
+			}
+		}()
+
 		wg.Wait()
 		close(results)
 	}()
@@ -250,6 +316,15 @@ func RunScan(cfg *config.Config) []state.Device {
 
 	// Worker goroutine for SNMP queries
 	worker := func() {
+		// Panic recovery for worker goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("RunScan SNMP worker panic recovered")
+			}
+		}()
+
 		defer wg.Done()
 		for ip := range jobs {
 			// Configure SNMP connection parameters
@@ -264,11 +339,11 @@ func RunScan(cfg *config.Config) []state.Device {
 			if err := params.Connect(); err != nil {
 				continue // Skip unresponsive devices
 			}
-			// Query standard MIB-II system OIDs: sysName, sysDescr, sysObjectID
-			oids := []string{"1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.2.0"}
+			// Query standard MIB-II system OIDs: sysName, sysDescr
+			oids := []string{"1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.1.0"}
 			resp, err := snmpGetWithFallback(params, oids)
 			params.Conn.Close()
-			if err != nil || len(resp.Variables) < 3 {
+			if err != nil || len(resp.Variables) < 2 {
 				continue // Skip devices with incomplete SNMP responses
 			}
 
@@ -281,17 +356,12 @@ func RunScan(cfg *config.Config) []state.Device {
 			if err != nil {
 				continue // Skip devices with invalid description data
 			}
-			sysObjectID, err := validateSNMPString(resp.Variables[2].Value, "sysObjectID")
-			if err != nil {
-				continue // Skip devices with invalid OID data
-			}
 
 			dev := state.Device{
-				IP:          ip,
-				Hostname:    hostname,
-				SysDescr:    sysDescr,
-				SysObjectID: sysObjectID,
-				LastSeen:    time.Now(),
+				IP:       ip,
+				Hostname: hostname,
+				SysDescr: sysDescr,
+				LastSeen: time.Now(),
 			}
 			results <- dev
 		}
@@ -306,15 +376,22 @@ func RunScan(cfg *config.Config) []state.Device {
 
 	// Producer: enqueue all IPs from configured CIDR ranges
 	for _, cidr := range cfg.Networks {
-		ips := ipsFromCIDR(cidr)
-		for _, ip := range ips {
-			jobs <- ip
-		}
+		// Stream IPs directly to jobs channel without intermediate array
+		streamIPsFromCIDR(cidr, jobs)
 	}
 	close(jobs)
 
 	// Wait for all workers to complete, then close results channel
 	go func() {
+		// Panic recovery for wait goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("RunScan wait goroutine panic recovered")
+			}
+		}()
+
 		wg.Wait()
 		close(results)
 	}()
@@ -332,7 +409,10 @@ func RunPingDiscovery(cidr string, icmpWorkers int) []state.Device {
 	// Calculate buffer size based on network size, capped at reasonable limit
 	_, ipnet, err := net.ParseCIDR(cidr)
 	if err != nil {
-		log.Printf("Invalid CIDR %s: %v", cidr, err)
+		log.Error().
+			Str("cidr", cidr).
+			Err(err).
+			Msg("Invalid CIDR")
 		return []state.Device{}
 	}
 	
@@ -351,6 +431,15 @@ func RunPingDiscovery(cidr string, icmpWorkers int) []state.Device {
 
 	// Worker goroutine for ICMP ping probes
 	worker := func() {
+		// Panic recovery for worker goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("RunPingDiscovery worker panic recovered")
+			}
+		}()
+
 		defer wg.Done()
 		for ip := range jobs {
 			pinger, err := probing.NewPinger(ip)
@@ -382,14 +471,20 @@ func RunPingDiscovery(cidr string, icmpWorkers int) []state.Device {
 	}
 
 	// Producer: enqueue all IPs from CIDR range
-	ips := ipsFromCIDR(cidr)
-	for _, ip := range ips {
-		jobs <- ip
-	}
+	streamIPsFromCIDR(cidr, jobs)
 	close(jobs)
 
 	// Wait for all workers to complete, then close results channel
 	go func() {
+		// Panic recovery for wait goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("RunPingDiscovery wait goroutine panic recovered")
+			}
+		}()
+
 		wg.Wait()
 		close(results)
 	}()
@@ -412,6 +507,15 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 
 	// Worker goroutine for SNMP queries (only on ping-responsive devices)
 	worker := func() {
+		// Panic recovery for worker goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("RunFullDiscovery SNMP worker panic recovered")
+			}
+		}()
+
 		defer wg.Done()
 		for ip := range jobs {
 			// Configure SNMP connection parameters
@@ -426,26 +530,24 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 			if err := params.Connect(); err != nil {
 				// SNMP failed, but device is online (from ICMP), so add basic device info
 				results <- state.Device{
-					IP:          ip,
-					Hostname:    ip, // Use IP as hostname for non-SNMP devices
-					SysDescr:    "ICMP-responsive device (SNMP unavailable)",
-					SysObjectID: "",
-					LastSeen:    time.Now(),
+					IP:       ip,
+					Hostname: ip, // Use IP as hostname for non-SNMP devices
+					SysDescr: "ICMP-responsive device (SNMP unavailable)",
+					LastSeen: time.Now(),
 				}
 				continue
 			}
-			// Query standard MIB-II system OIDs: sysName, sysDescr, sysObjectID
-			oids := []string{"1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.2.0"}
+			// Query standard MIB-II system OIDs: sysName, sysDescr
+			oids := []string{"1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.1.0"}
 			resp, err := snmpGetWithFallback(params, oids)
 			params.Conn.Close()
-			if err != nil || len(resp.Variables) < 3 {
+			if err != nil || len(resp.Variables) < 2 {
 				// SNMP query failed, but device is online
 				results <- state.Device{
-					IP:          ip,
-					Hostname:    ip,
-					SysDescr:    "ICMP-responsive device (SNMP query failed)",
-					SysObjectID: "",
-					LastSeen:    time.Now(),
+					IP:       ip,
+					Hostname: ip,
+					SysDescr: "ICMP-responsive device (SNMP query failed)",
+					LastSeen: time.Now(),
 				}
 				continue
 			}
@@ -459,24 +561,19 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 			if err != nil {
 				continue // Skip devices with invalid description data
 			}
-			sysObjectID, err := validateSNMPString(resp.Variables[2].Value, "sysObjectID")
-			if err != nil {
-				continue // Skip devices with invalid OID data
-			}
 
 			dev := state.Device{
-				IP:          ip,
-				Hostname:    hostname,
-				SysDescr:    sysDescr,
-				SysObjectID: sysObjectID,
-				LastSeen:    time.Now(),
+				IP:       ip,
+				Hostname: hostname,
+				SysDescr: sysDescr,
+				LastSeen: time.Now(),
 			}
 			results <- dev
 		}
 	}
 
 	// First, perform ICMP ping sweep to find online devices
-	log.Println("Performing ICMP discovery to find online devices...")
+	log.Info().Msg("Performing ICMP discovery to find online devices")
 	onlineIPs := make([]string, 0)
 
 	var icmpWg sync.WaitGroup
@@ -485,6 +582,15 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 
 	// ICMP worker goroutine
 	icmpWorker := func() {
+		// Panic recovery for worker goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("RunFullDiscovery ICMP worker panic recovered")
+			}
+		}()
+
 		defer icmpWg.Done()
 		for ip := range icmpJobs {
 			pinger, err := probing.NewPinger(ip)
@@ -513,15 +619,22 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 
 	// Producer: enqueue all IPs from all configured networks
 	for _, network := range cfg.Networks {
-		ips := ipsFromCIDR(network)
-		for _, ip := range ips {
-			icmpJobs <- ip
-		}
+		// Stream IPs directly to channel without intermediate array
+		streamIPsFromCIDR(network, icmpJobs)
 	}
 	close(icmpJobs)
 
 	// Wait for ICMP discovery to complete
 	go func() {
+		// Panic recovery for wait goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("RunFullDiscovery ICMP wait goroutine panic recovered")
+			}
+		}()
+
 		icmpWg.Wait()
 		close(icmpResults)
 	}()
@@ -531,7 +644,9 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 		onlineIPs = append(onlineIPs, ip)
 	}
 
-	log.Printf("ICMP discovery found %d online devices, now polling with SNMP...", len(onlineIPs))
+	log.Info().
+		Int("online_devices", len(onlineIPs)).
+		Msg("ICMP discovery complete, starting SNMP polling")
 
 	// Now perform SNMP polling only on online devices
 	// Launch SNMP worker goroutines
@@ -549,6 +664,15 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 
 	// Wait for all SNMP workers to complete
 	go func() {
+		// Panic recovery for wait goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("RunFullDiscovery SNMP wait goroutine panic recovered")
+			}
+		}()
+
 		wg.Wait()
 		close(results)
 	}()
@@ -561,8 +685,47 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 	return devices
 }
 
+// streamIPsFromCIDR streams IP addresses from CIDR notation directly to a channel
+// This avoids allocating memory for all IPs at once, significantly reducing memory usage
+func streamIPsFromCIDR(cidr string, ipChan chan<- string) {
+	ip, ipnet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		log.Error().
+			Str("cidr", cidr).
+			Err(err).
+			Msg("Invalid CIDR")
+		return
+	}
+	
+	// Calculate network size for safety checks
+	ones, bits := ipnet.Mask.Size()
+	hostBits := bits - ones
+	
+	// For networks larger than /16 (65K hosts), log warning
+	// but still proceed (worker pool will rate-limit actual operations)
+	if hostBits > 16 {
+		log.Warn().
+			Str("cidr", cidr).
+			Int("host_bits", hostBits).
+			Msg("Large network detected - scan may take significant time")
+	}
+	
+	// Stream IPs directly to channel
+	count := 0
+	maxIPs := 1 << uint(hostBits) // Calculate actual network size
+	if maxIPs > 65536 {
+		maxIPs = 65536 // Safety limit
+	}
+	
+	for ip := ip.Mask(ipnet.Mask); ipnet.Contains(ip) && count < maxIPs; incIP(ip) {
+		ipChan <- ip.String()
+		count++
+	}
+}
+
 // ipsFromCIDR expands CIDR notation into individual IP addresses
-// For large networks, this streams IPs via channel to avoid loading all into memory
+// NOTE: This function allocates memory for all IPs. For large networks, use streamIPsFromCIDR instead.
+// This is kept for backward compatibility with RunScanIPsOnly
 func ipsFromCIDR(cidr string) []string {
 	var ips []string
 	ip, ipnet, err := net.ParseCIDR(cidr)

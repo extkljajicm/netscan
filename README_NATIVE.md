@@ -318,12 +318,25 @@ go test -cover ./...             # Coverage report
 
 **Test Coverage:**
 
-- Configuration parsing and validation
-- Network discovery algorithms
-- State management concurrency
-- InfluxDB client operations
-- ICMP ping monitoring
-- SNMP polling functionality
+The project includes comprehensive test files that validate critical functionality:
+
+- **`cmd/netscan/orchestration_test.go`**: Tests the four-ticker orchestration logic, graceful shutdown, pinger reconciliation, and daily SNMP scheduling (11 test functions + 1 benchmark)
+- **`internal/config/config_test.go`**: Tests configuration parsing, validation, and environment variable expansion
+- **`internal/discovery/scanner_test.go`**: Tests ICMP and SNMP scanning algorithms
+- **`internal/influx/writer_test.go`**: Tests InfluxDB client operations, batch writes, and error handling
+- **`internal/monitoring/pinger_test.go`**: Tests continuous ping monitoring logic
+- **`internal/state/manager_test.go`**: Tests device state management
+- **`internal/state/manager_concurrent_test.go`**: Tests thread-safety and concurrent access patterns with race detection
+
+All tests must pass and be race-free before deployment:
+
+```bash
+# Verify all tests pass
+go test ./...
+
+# Ensure no race conditions
+go test -race ./...
+```
 
 ### Integration Testing
 
@@ -472,6 +485,35 @@ go fmt ./...
 # Run linter (if available)
 golangci-lint run
 ```
+
+## Build-Related Files
+
+### `cliff.toml`
+Configuration file for [`git-cliff`](https://github.com/orhun/git-cliff), a changelog generator that creates `CHANGELOG.md` from git commit history.
+
+**Purpose:**
+- Automates changelog generation from conventional commits
+- Defines commit message parsing patterns
+- Configures changelog sections (Features, Bug Fixes, Performance, etc.)
+- Sets header and footer templates
+- Determines version tag patterns
+
+**Usage:**
+```bash
+# Generate changelog (requires git-cliff to be installed)
+git cliff -o CHANGELOG.md
+
+# Generate changelog for specific version range
+git cliff --tag v1.0.0 -o CHANGELOG.md
+```
+
+**Configuration includes:**
+- Commit parsers for conventional commit format
+- Section templates for different change types
+- Link generation for commits and comparisons
+- Version tag detection patterns
+
+This file is used during release processes to maintain a consistent, automatically-generated changelog.
 
 ## Additional Resources
 

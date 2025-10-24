@@ -7,11 +7,10 @@ import (
 
 // Device represents a discovered network device with metadata
 type Device struct {
-	IP          string    // IPv4 address of the device
-	Hostname    string    // Device hostname from SNMP or IP address
-	SysDescr    string    // SNMP sysDescr MIB-II value
-	SysObjectID string    // SNMP sysObjectID MIB-II value
-	LastSeen    time.Time // Timestamp of last successful discovery
+	IP       string    // IPv4 address of the device
+	Hostname string    // Device hostname from SNMP or IP address
+	SysDescr string    // SNMP sysDescr MIB-II value
+	LastSeen time.Time // Timestamp of last successful discovery
 }
 
 // Manager provides thread-safe device state management
@@ -132,13 +131,12 @@ func (m *Manager) UpdateLastSeen(ip string) {
 }
 
 // UpdateDeviceSNMP enriches an existing device with SNMP data
-func (m *Manager) UpdateDeviceSNMP(ip, hostname, sysDescr, sysObjectID string) {
+func (m *Manager) UpdateDeviceSNMP(ip, hostname, sysDescr string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if dev, exists := m.devices[ip]; exists {
 		dev.Hostname = hostname
 		dev.SysDescr = sysDescr
-		dev.SysObjectID = sysObjectID
 		dev.LastSeen = time.Now()
 	}
 }

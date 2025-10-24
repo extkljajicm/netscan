@@ -18,11 +18,10 @@ func TestManagerConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
 				dev := Device{
-					IP:          "192.168.1." + string(rune('0'+j%10)),
-					Hostname:    "host",
-					SysDescr:    "desc",
-					SysObjectID: "obj",
-					LastSeen:    time.Now(),
+					IP:       "192.168.1." + string(rune('0'+j%10)),
+					Hostname: "host",
+					SysDescr: "desc",
+					LastSeen: time.Now(),
 				}
 				mgr.Add(dev)
 			}
@@ -69,11 +68,10 @@ func TestManagerMaxDevicesLimit(t *testing.T) {
 	// Add more devices than the limit
 	for i := 0; i < 20; i++ {
 		dev := Device{
-			IP:          "192.168.1." + string(rune('0'+i)),
-			Hostname:    "host",
-			SysDescr:    "desc",
-			SysObjectID: "obj",
-			LastSeen:    time.Now().Add(time.Duration(i) * time.Second),
+			IP:       "192.168.1." + string(rune('0'+i)),
+			Hostname: "host",
+			SysDescr: "desc",
+			LastSeen: time.Now().Add(time.Duration(i) * time.Second),
 		}
 		mgr.Add(dev)
 		
@@ -100,11 +98,10 @@ func TestManagerPruneConcurrent(t *testing.T) {
 	// Add some old devices
 	for i := 0; i < 10; i++ {
 		dev := Device{
-			IP:          "192.168.1." + string(rune('0'+i)),
-			Hostname:    "host",
-			SysDescr:    "desc",
-			SysObjectID: "obj",
-			LastSeen:    time.Now().Add(-1 * time.Hour), // Old timestamp
+			IP:       "192.168.1." + string(rune('0'+i)),
+			Hostname: "host",
+			SysDescr: "desc",
+			LastSeen: time.Now().Add(-1 * time.Hour), // Old timestamp
 		}
 		mgr.Add(dev)
 	}
