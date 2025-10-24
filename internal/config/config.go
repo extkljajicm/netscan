@@ -242,11 +242,11 @@ func ValidateConfig(cfg *Config) (string, error) {
 	}
 
 	// Validate worker counts
-	if cfg.IcmpWorkers < 1 || cfg.IcmpWorkers > 1000 {
-		return "", fmt.Errorf("icmp_workers must be between 1 and 1000, got %d", cfg.IcmpWorkers)
+	if cfg.IcmpWorkers < 1 || cfg.IcmpWorkers > 2000 {
+		return "", fmt.Errorf("icmp_workers must be between 1 and 2000, got %d", cfg.IcmpWorkers)
 	}
-	if cfg.SnmpWorkers < 1 || cfg.SnmpWorkers > 500 {
-		return "", fmt.Errorf("snmp_workers must be between 1 and 500, got %d", cfg.SnmpWorkers)
+	if cfg.SnmpWorkers < 1 || cfg.SnmpWorkers > 1000 {
+		return "", fmt.Errorf("snmp_workers must be between 1 and 1000, got %d", cfg.SnmpWorkers)
 	}
 
 	// Validate intervals
