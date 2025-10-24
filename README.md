@@ -1,151 +1,93 @@
 # netscan
 
-Network monitoring service written in Go that performs ICMP ping monitoring of discovered devices and stores metrics in InfluxDB.
+Production-grade network monitoring service written in Go (1.25+) for linux-amd64. Performs automated ICMP discovery, continuous ping monitoring, and SNMP metadata collection with time-series metrics storage in InfluxDB v2.
 
-> **📝 Note:** This README focuses on Docker deployment. For native installation (systemd, manual builds), see [README_NATIVE.md](README_NATIVE.md).
+---
 
-## Overview
+## Section 1: Docker Deployment (Recommended)
 
-Performs decoupled network discovery and monitoring with four independent tickers: ICMP discovery finds new devices, scheduled SNMP scans enrich device data, pinger reconciliation ensures continuous monitoring, and state pruning removes stale devices. This architecture provides efficient resource usage and fast response to network changes.
-
-## Features
-
-- **Multi-Ticker Architecture**: Four independent tickers for decoupled operations
-  - ICMP Discovery (every 5m) - Finds new responsive devices
-  - Daily SNMP Scan (scheduled) - Enriches all devices with SNMP data
-  - Pinger Reconciliation (every 5s) - Ensures all devices monitored
-  - State Pruning (every 1h) - Removes stale devices
-- **Dual-Trigger SNMP**: Immediate scan for new devices + scheduled daily scan for all devices
-- **Concurrent Processing**: Configurable worker pool patterns for scalable network operations
-- **State-Centric Design**: StateManager as single source of truth for all devices
-- **Health Check Endpoint**: HTTP server with `/health`, `/health/ready`, and `/health/live` endpoints for Docker HEALTHCHECK and Kubernetes probes
-- **Batch InfluxDB Writes**: Configurable batching (default: 100 points, 5s flush) reduces network requests by ~99%
-- **Structured Logging**: Machine-parseable JSON logs with zerolog for production debugging and log aggregation
-- **Security Scanning**: Automated CI/CD vulnerability detection with govulncheck and Trivy
-- **Comprehensive Tests**: 11 test functions covering orchestration logic, graceful shutdown, and pinger reconciliation
-- **InfluxDB v2**: Time-series metrics storage with batch writes and health checks
-- **Docker Deployment**: Complete stack with Docker Compose and HEALTHCHECK integration
-- **Security**: Linux capabilities (CAP_NET_RAW) for ICMP access, input validation, and secure credential handling
-
-## Architecture
-
-The application uses a **multi-ticker architecture** with four independent, concurrent loops:
-
-1. **ICMP Discovery Ticker** - Scans networks for responsive devices
-2. **Daily SNMP Scan Ticker** - Enriches devices with SNMP data at scheduled time
-3. **Pinger Reconciliation Ticker** - Ensures all devices have active monitoring
-4. **State Pruning Ticker** - Removes devices not seen in 24 hours
-
-```bash
-cmd/netscan/main.go           # Four-ticker orchestration and CLI interface
-internal/
-├── config/config.go          # YAML parsing with SNMPDailySchedule support
-├── discovery/scanner.go      # RunICMPSweep() and RunSNMPScan() functions
-├── monitoring/pinger.go      # ICMP monitoring with StateManager integration
-├── state/manager.go          # Thread-safe device state (single source of truth)
-└── influx/writer.go          # InfluxDB client wrapper with health checks
-```
-
-## Quick Start with Docker
-
-The easiest way to get netscan running is with Docker Compose, which sets up both netscan and InfluxDB automatically.
+Docker deployment provides the easiest path to get netscan running with automatic orchestration of the complete stack (netscan + InfluxDB).
 
 ### Prerequisites
 
-- Docker Engine 20.10+
-- Docker Compose V2
+* Docker Engine 20.10+
+* Docker Compose V2
+* Network access to target devices
 
 ### Installation Steps
 
-1. **Clone the repository**
+**1. Clone Repository**
+```bash
+git clone https://github.com/kljama/netscan.git
+cd netscan
+```
 
-   ```bash
-   git clone https://github.com/kljama/netscan.git
-   cd netscan
-   ```
+**2. Create Configuration File**
+```bash
+cp config.yml.example config.yml
+```
 
-2. **Create and configure config.yml**
+Edit `config.yml` and update the `networks` section with your actual network ranges:
+```yaml
+networks:
+  - "192.168.1.0/24"    # YOUR actual network range
+  - "10.0.50.0/24"      # Add additional ranges as needed
+```
 
-   ```bash
-   # Copy the example configuration
-   cp config.yml.example config.yml
-   
-   # Edit the configuration with your actual network settings
-   nano config.yml
-   ```
+**CRITICAL:** The example networks (192.168.0.0/24, etc.) are placeholders. If these don't match your network, netscan will find 0 devices. Use `ip addr` (Linux) or `ipconfig` (Windows) to determine your network range.
 
-   **CRITICAL**: The example networks in config.yml.example (192.168.0.0/24, etc.):
+**3. (Optional) Configure Credentials**
 
-   ```yaml
-   networks:
-     - "192.168.1.0/24"    # ✅ Use YOUR actual network range
-     # - "10.0.0.0/16"     # ✅ Add more ranges if needed
-   ```
+For production security, create a `.env` file instead of using default credentials:
+```bash
+cp .env.example .env
+chmod 600 .env
+```
 
-3. **(Optional) Configure credentials with .env file**
+Edit `.env` and set secure values:
+```bash
+INFLUXDB_TOKEN=<generate-with-openssl-rand-base64-32>
+DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=<same-as-INFLUXDB_TOKEN>
+DOCKER_INFLUXDB_INIT_PASSWORD=<strong-password>
+SNMP_COMMUNITY=<your-snmp-community-not-public>
+```
 
-   For production security, use a .env file instead of hardcoded values in docker-compose.yml:
+The `.env` file is automatically loaded by Docker Compose. Variables are expanded in `config.yml` (e.g., `${INFLUXDB_TOKEN}`).
 
-   ```bash
-   # Copy the example .env file
-   cp .env.example .env
-   
-   # Edit with secure credentials
-   nano .env
-   ```
+**4. Start Stack**
+```bash
+docker compose up -d
+```
 
-   Update at minimum:
-   - `INFLUXDB_TOKEN` - Use a strong random token
-   - `DOCKER_INFLUXDB_INIT_PASSWORD` - Use a strong password
-   - `SNMP_COMMUNITY` - Change from default 'public'
+This builds the netscan image from the local Dockerfile and starts both netscan and InfluxDB v2.7.
 
-   The .env file is in .gitignore and won't be committed to git.
+**5. Verify Operation**
+```bash
+# Check container status
+docker compose ps
 
-   **Note**: If you don't create a .env file, docker-compose.yml will use the default test values.
+# View netscan logs
+docker compose logs -f netscan
 
-4. **Start the stack**
+# Check health endpoint
+curl http://localhost:8080/health | jq
+```
 
-   ```bash
-   docker compose up -d
-   ```
+**6. Access InfluxDB UI (Optional)**
 
-   This will:
-   - Build the netscan Docker image from the local Dockerfile
-   - Start InfluxDB with persistent storage
-   - Start netscan with network monitoring capabilities
-   - Use credentials from .env file if present, or defaults
+Navigate to http://localhost:8086 in your browser:
+* Username: `admin`
+* Password: `admin123` (or your `.env` value)
+* Organization: `test-org`
+* Bucket: `netscan`
 
-5. **Verify it's running**
-
-   ```bash
-   # Check container status
-   docker compose ps
-   
-   # View netscan logs
-   docker compose logs -f netscan
-   
-   # View InfluxDB logs
-   docker compose logs -f influxdb
-   
-   # Check health endpoint
-   curl http://localhost:8080/health | jq
-   ```
-
-6. **Access InfluxDB UI** (optional)
-
-   Open <http://localhost:8086> in your browser
-   - Username: `admin`
-   - Password: `admin123`
-   - Organization: `test-org`
-   - Bucket: `netscan`
-
-### Managing the Docker Stack
+### Service Management
 
 ```bash
-# Stop services
+# Stop services (keeps data)
 docker compose down
 
-# Stop and remove all data (including InfluxDB storage)
+# Stop and remove all data
 docker compose down -v
 
 # Restart services
@@ -154,131 +96,566 @@ docker compose restart
 # Rebuild after code changes
 docker compose up -d --build
 
-# View real-time logs
-docker compose logs -f
-
-# View logs for specific service
+# View logs
 docker compose logs -f netscan
+docker compose logs -f influxdb
 ```
 
-### Docker Configuration Details
+### Configuration Details
 
 The `docker-compose.yml` configures:
 
-- **netscan service**:
-  - Builds from local Dockerfile (Go 1.25)
-  - Uses `host` network mode for ICMP/SNMP access to your network
-  - Mounts `config.yml` as read-only
-  - Exposes port 8080 for health check endpoint
-  - Environment variables from .env file or defaults:
-    - `INFLUXDB_TOKEN` (default: netscan-token)
-    - `INFLUXDB_ORG` (default: test-org)
-    - `SNMP_COMMUNITY` (default: public)
-  - Docker HEALTHCHECK on `/health/live` endpoint
-  - Auto-restarts on failure
+* **netscan service:**
+  * Builds from local Dockerfile (multi-stage, Go 1.25, ~15MB final image)
+  * `network_mode: host` - Direct access to host network for ICMP/SNMP
+  * `cap_add: NET_RAW` - Linux capability for raw ICMP sockets
+  * Runs as root (required for ICMP in containers, see Security Notes)
+  * Mounts `config.yml` as read-only volume at `/app/config.yml`
+  * Environment variables from `.env` file or defaults
+  * HEALTHCHECK on `/health/live` endpoint (30s interval, 3s timeout, 3 retries, 40s start period)
+  * Auto-restart on failure
 
-- **influxdb service**:
-  - InfluxDB 2.7 for metrics storage
-  - Exposed on port 8086
-  - Environment variables from .env file or defaults
-  - Persistent volume for data retention
+* **influxdb service:**
+  * InfluxDB v2.7 official image
+  * Exposed on port 8086
+  * Environment variables from `.env` file or defaults
+  * Persistent volume `influxdbv2-data` for data retention
+  * Health check using `influx ping`
 
-### Customizing for Production
+### Security Notes
 
-**Recommended: Use .env file** (more secure than editing docker-compose.yml):
+**Docker Deployment:**
+* Container runs as root user (non-negotiable requirement for ICMP raw socket access in Linux containers)
+* CAP_NET_RAW capability provides raw socket access without full privileged mode
+* Container remains isolated from host through Docker namespace isolation
+* Minimal Alpine Linux base image (~15MB) reduces attack surface
+* Config file mounted read-only (`:ro`)
 
-1. Create .env file from example:
+**Security Trade-off:** Root access is required for ping functionality, but Docker containerization provides security boundary. For maximum security without root, use Native Deployment (Section 2).
 
-   ```bash
-   cp .env.example .env
-   chmod 600 .env  # Restrict file permissions
-   ```
+### Troubleshooting
 
-2. Edit .env with secure credentials:
+**Container finds 0 devices:**
+```bash
+# 1. Verify config.yml exists and is mounted
+docker exec -it netscan cat /app/config.yml | grep -A 5 "networks:"
 
-   ```bash
-   # Generate a secure token
-   openssl rand -base64 32
-   
-   # Update .env file
-   INFLUXDB_TOKEN=<your-secure-token>
-   DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=<your-secure-token>
-   DOCKER_INFLUXDB_INIT_PASSWORD=<your-secure-password>
-   SNMP_COMMUNITY=<your-community-string>
-   ```
+# 2. Check networks being scanned
+docker compose logs netscan | grep "Scanning networks"
 
-3. Start with .env file:
+# 3. Verify host network mode
+docker inspect netscan | grep NetworkMode
+# Should show: "NetworkMode": "host"
 
-   ```bash
-   docker compose up -d
-   ```
-
-**Alternative: Edit docker-compose.yml directly**:
-
-```yaml
-services:
-  netscan:
-    environment:
-      - INFLUXDB_TOKEN=your-secure-token
-      - INFLUXDB_ORG=your-org
-      - SNMP_COMMUNITY=your-community-string
-  
-  influxdb:
-    environment:
-      - DOCKER_INFLUXDB_INIT_USERNAME=your-admin-user
-      - DOCKER_INFLUXDB_INIT_PASSWORD=your-secure-password
-      - DOCKER_INFLUXDB_INIT_ORG=your-org
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=your-secure-token
+# 4. Test ping manually
+docker exec -it netscan ping -c 2 192.168.1.1
+# Replace 192.168.1.1 with an IP from your network
 ```
 
-**Security Notes**:
+**Container keeps restarting:**
+```bash
+# Check logs for errors
+docker compose logs netscan
 
-- .env file is in .gitignore and won't be committed
-- Always use strong, random tokens in production
-- Change default SNMP community from 'public'
-- Restrict .env file permissions: `chmod 600 .env`
+# Common causes:
+# - Invalid config.yml syntax
+# - InfluxDB credentials mismatch
+# - Missing config.yml file
+```
 
-The config.yml file can remain unchanged - environment variables will be automatically expanded:
+**InfluxDB connection failed:**
+```bash
+# Verify InfluxDB is healthy
+docker compose ps influxdb
+
+# Check InfluxDB health endpoint
+curl http://localhost:8086/health
+
+# Verify credentials in config.yml match docker-compose.yml
+# token: netscan-token (default) or your .env value
+# org: test-org (default) or your .env value
+```
+
+---
+
+## Section 2: Native systemd Deployment (Alternative)
+
+Native deployment provides maximum security by running as a non-root service user with Linux capabilities. Recommended for production environments requiring strict security controls.
+
+### Prerequisites
+
+* Go 1.25+
+* InfluxDB 2.x (separate installation)
+* Linux with systemd
+* Root privileges for installation (service runs as non-root)
+
+### Installation
+
+**1. Install Dependencies**
+
+Ubuntu/Debian:
+```bash
+sudo apt update
+sudo apt install golang-go
+```
+
+Arch/CachyOS:
+```bash
+sudo pacman -S go
+```
+
+**2. Clone and Build**
+```bash
+git clone https://github.com/kljama/netscan.git
+cd netscan
+go mod download
+go build -o netscan ./cmd/netscan
+```
+
+**3. Deploy with Automated Script**
+```bash
+sudo ./deploy.sh
+```
+
+This creates:
+* `/opt/netscan/` directory with binary, config, and `.env` file
+* `netscan` system user (no shell, minimal privileges)
+* CAP_NET_RAW capability on binary (via setcap)
+* Systemd service unit with security restrictions
+* Secure `.env` file (mode 600) for credentials
+
+**4. Configure**
+
+Edit `/opt/netscan/config.yml` with your network ranges:
+```yaml
+networks:
+  - "192.168.1.0/24"    # YOUR actual network
+```
+
+Edit `/opt/netscan/.env` with your InfluxDB credentials:
+```bash
+INFLUXDB_URL=http://localhost:8086
+INFLUXDB_TOKEN=<your-influxdb-token>
+INFLUXDB_ORG=<your-org>
+INFLUXDB_BUCKET=netscan
+SNMP_COMMUNITY=<your-snmp-community>
+```
+
+**5. Start Service**
+```bash
+sudo systemctl start netscan
+sudo systemctl enable netscan  # Start on boot
+```
+
+### Service Management
+
+```bash
+# Check status
+sudo systemctl status netscan
+
+# View logs
+sudo journalctl -u netscan -f
+
+# Restart
+sudo systemctl restart netscan
+
+# Stop
+sudo systemctl stop netscan
+
+# Disable auto-start
+sudo systemctl disable netscan
+```
+
+### Manual Deployment (Alternative)
+
+If you prefer not to use `deploy.sh`:
+
+```bash
+# Build binary
+go build -o netscan ./cmd/netscan
+
+# Create installation directory
+sudo mkdir -p /opt/netscan
+sudo cp netscan /opt/netscan/
+sudo cp config.yml /opt/netscan/
+
+# Set ICMP capability
+sudo setcap cap_net_raw+ep /opt/netscan/netscan
+
+# Create service user
+sudo useradd -r -s /bin/false netscan
+sudo chown -R netscan:netscan /opt/netscan
+
+# Create systemd service
+sudo tee /etc/systemd/system/netscan.service > /dev/null <<EOF
+[Unit]
+Description=netscan network monitoring
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/netscan/netscan
+WorkingDirectory=/opt/netscan
+Restart=always
+User=netscan
+Group=netscan
+
+# Load environment variables
+EnvironmentFile=/opt/netscan/.env
+
+# Security settings
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+AmbientCapabilities=CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Reload and start
+sudo systemctl daemon-reload
+sudo systemctl enable netscan
+sudo systemctl start netscan
+```
+
+### Security Features
+
+**Native Deployment Security:**
+* Runs as dedicated `netscan` service user (not root)
+* Service user has `/bin/false` shell (no interactive login)
+* CAP_NET_RAW capability via setcap (no root required for ICMP)
+* Systemd security restrictions: NoNewPrivileges, PrivateTmp, ProtectSystem=strict
+* Credentials in `.env` file with mode 600 (readable only by service user)
+
+**Comparison with Docker:**
+* Native: Non-root execution, tighter security controls
+* Docker: Root required for ICMP, container isolation provides security boundary
+
+### Command Line Usage
+
+```bash
+# Standard mode (uses config.yml in working directory)
+./netscan
+
+# Custom config path
+./netscan -config /path/to/config.yml
+
+# Help
+./netscan -help
+```
+
+### Health Check Endpoint
+
+Once running, the service exposes an HTTP server on port 8080 (configurable):
+
+```bash
+# Detailed health status
+curl http://localhost:8080/health | jq
+
+# Readiness probe (for load balancers)
+curl http://localhost:8080/health/ready
+
+# Liveness probe (for process monitors)
+curl http://localhost:8080/health/live
+```
+
+### Uninstallation
+
+**Automated:**
+```bash
+sudo ./undeploy.sh
+```
+
+**Manual:**
+```bash
+sudo systemctl stop netscan
+sudo systemctl disable netscan
+sudo rm /etc/systemd/system/netscan.service
+sudo systemctl daemon-reload
+sudo rm -rf /opt/netscan
+sudo userdel netscan
+```
+
+### Troubleshooting
+
+**ICMP permission denied:**
+```bash
+# Check capability
+getcap /opt/netscan/netscan
+# Should show: cap_net_raw+ep
+
+# Manually set capability
+sudo setcap cap_net_raw+ep /opt/netscan/netscan
+```
+
+**InfluxDB connection issues:**
+```bash
+# Verify InfluxDB is running
+systemctl status influxdb
+
+# Test connectivity
+curl http://localhost:8086/health
+
+# Check credentials in /opt/netscan/.env
+# Review logs
+sudo journalctl -u netscan -n 50
+```
+
+**No devices discovered:**
+```bash
+# Verify network ranges in config.yml
+# Check firewall rules for ICMP/SNMP
+# Test manually
+ping 192.168.1.1
+# Check logs
+sudo journalctl -u netscan | grep discovery
+```
+
+---
+
+## Section 3: Configuration Reference
+
+Complete documentation of all configuration parameters. All duration fields accept Go duration format (e.g., "5m", "2s", "1h30m").
+
+### Configuration File Location
+
+* **Docker:** `/app/config.yml` (mounted from host `./config.yml`)
+* **Native:** `config.yml` in working directory or via `-config` flag
+
+### Environment Variable Expansion
+
+The configuration file supports `${VAR_NAME}` syntax for environment variable expansion. Variables are loaded from:
+* **Docker:** docker-compose.yml environment section or `.env` file
+* **Native:** `/opt/netscan/.env` file (loaded by systemd EnvironmentFile)
+
+### Network Discovery Settings
+
+```yaml
+# Network ranges to scan (CIDR notation)
+# REQUIRED: Update with YOUR actual network ranges
+networks:
+  - "192.168.1.0/24"    # Example: Home network
+  - "10.0.50.0/24"      # Example: Server network
+  # Add more ranges as needed
+```
+
+**Notes:**
+* Use CIDR notation (e.g., `/24` for 254 hosts, `/16` for 65,534 hosts)
+* Smaller ranges scan faster
+* Maximum /16 recommended (security limit)
+
+```yaml
+# How often to run ICMP discovery to find new devices
+# Default: "5m"
+# Range: Minimum "1m" (enforced by min_scan_interval)
+icmp_discovery_interval: "5m"
+```
+
+**Notes:**
+* More frequent scans find new devices faster but increase CPU/network load
+* 5 minutes is reasonable for most networks
+
+```yaml
+# Daily scheduled SNMP scan time (HH:MM format, 24-hour)
+# Full SNMP scan of all known devices runs once per day at this time
+# Default: "02:00" (2:00 AM)
+# Set to empty string "" to disable scheduled SNMP scans
+snmp_daily_schedule: "02:00"
+```
+
+**Notes:**
+* Uses local system time
+* Immediate SNMP scan still runs on device discovery
+* Schedule useful for refreshing metadata overnight
+
+### SNMP Settings
+
+```yaml
+snmp:
+  # SNMPv2c community string (uses environment variable expansion)
+  # Default: "public" (CHANGE THIS for production!)
+  community: "${SNMP_COMMUNITY}"
+  
+  # SNMP port
+  # Default: 161
+  port: 161
+  
+  # Timeout for SNMP queries
+  # Default: "5s"
+  timeout: "5s"
+  
+  # Number of retries for failed SNMP queries
+  # Default: 1
+  retries: 1
+```
+
+**Notes:**
+* SNMPv2c uses plain-text community strings (not secure)
+* SNMPv3 support is deferred to future releases
+* Increase timeout for slow/distant devices
+* Increase retries for unreliable networks
+
+### Monitoring Settings
+
+```yaml
+# Ping frequency per monitored device
+# Default: "2s"
+# Each device gets dedicated pinger goroutine pinging at this interval
+ping_interval: "2s"
+
+# Timeout for individual ping operations
+# Default: "2s"
+ping_timeout: "2s"
+```
+
+**Notes:**
+* Lower intervals (e.g., "1s") provide more data points but increase CPU/network load
+* ping_timeout should be ≤ ping_interval to avoid overlap
+
+### Performance Tuning
+
+```yaml
+# Number of concurrent ICMP ping workers for discovery scans
+# Default: 64
+# Recommended: 2-4x CPU cores
+# Range: 1-256
+icmp_workers: 64
+
+# Number of concurrent SNMP polling workers
+# Default: 32
+# Recommended: 1-2x CPU cores (SNMP is CPU-intensive due to protocol parsing)
+# Range: 1-128
+snmp_workers: 32
+```
+
+**Worker Count Guidelines:**
+
+| System Type      | CPU Cores | ICMP Workers | SNMP Workers | Max Devices |
+|------------------|-----------|--------------|--------------|-------------|
+| Raspberry Pi     | 4         | 8            | 4            | 100         |
+| Home Server      | 4-8       | 16           | 8            | 500         |
+| Workstation      | 8-16      | 32           | 16           | 1000        |
+| Dedicated Server | 16+       | 64           | 32           | 10000       |
+
+**Notes:**
+* Start conservative and increase based on CPU usage
+* Monitor with `htop` or `top`
+* Network latency affects optimal worker count
+
+### InfluxDB Settings
 
 ```yaml
 influxdb:
+  # InfluxDB v2 server URL
+  # Docker default: "http://localhost:8086" (host network mode)
+  # Native default: "http://localhost:8086" (assumes local InfluxDB)
   url: "http://localhost:8086"
-  token: "${INFLUXDB_TOKEN}"  # Automatically expanded from docker-compose environment
-  org: "${INFLUXDB_ORG}"      # Automatically expanded from docker-compose environment
+  
+  # API authentication token (uses environment variable expansion)
+  # Docker: Set in docker-compose.yml or .env file
+  # Native: Set in /opt/netscan/.env file
+  token: "${INFLUXDB_TOKEN}"
+  
+  # Organization name (uses environment variable expansion)
+  # Docker default: "test-org"
+  # Native: Your organization name
+  org: "${INFLUXDB_ORG}"
+  
+  # Bucket for metrics storage
+  # Default: "netscan"
   bucket: "netscan"
-
-snmp:
-  community: "${SNMP_COMMUNITY}"  # Automatically expanded from docker-compose environment
+  
+  # Batch write settings for performance
+  # Number of points to accumulate before writing
+  # Default: 100
+  # Range: 10-1000
+  batch_size: 100
+  
+  # Maximum time to hold points before flushing
+  # Default: "5s"
+  # Range: "1s"-"60s"
+  flush_interval: "5s"
 ```
 
-## Configuration
+**Batching Notes:**
+* Batching reduces InfluxDB requests by ~99% for large deployments
+* Larger batch_size reduces request frequency but increases memory usage
+* Shorter flush_interval reduces data lag but increases request frequency
+* Defaults (100 points, 5s) work well for 100-1000 devices
 
-### For Docker Deployment
+**InfluxDB Schema:**
+* Measurement: `ping`
+  * Tags: `ip`, `hostname`
+  * Fields: `rtt_ms` (float64), `success` (bool)
+* Measurement: `device_info`
+  * Tags: `ip`
+  * Fields: `hostname` (string), `snmp_description` (string)
 
-The configuration is handled through `config.yml`. Copy and edit the template:
+### Health Check Endpoint
 
-```bash
-cp config.yml.example config.yml
+```yaml
+# HTTP server port for health check endpoints
+# Default: 8080
+# Used by Docker HEALTHCHECK and Kubernetes probes
+health_check_port: 8080
 ```
 
-Edit the following key settings:
+**Endpoints:**
+* `GET /health` - Detailed JSON status (device count, memory, goroutines, InfluxDB stats)
+* `GET /health/ready` - Readiness probe (200 if InfluxDB OK, 503 if unavailable)
+* `GET /health/live` - Liveness probe (200 if application running)
 
-- `networks`: Your network ranges (e.g., `192.168.1.0/24`)
+**Docker Integration:**
+* HEALTHCHECK directive in Dockerfile uses `/health/live`
+* docker-compose.yml healthcheck uses wget on `/health/live`
 
-### Configuration Structure
+**Kubernetes Integration:**
+* Configure livenessProbe with `/health/live`
+* Configure readinessProbe with `/health/ready`
+
+### Resource Protection Settings
+
+```yaml
+# Maximum number of concurrent pinger goroutines
+# Default: 1000
+# Prevents goroutine exhaustion
+max_concurrent_pingers: 1000
+
+# Maximum number of devices to monitor
+# Default: 10000
+# When limit reached, oldest devices (by LastSeen) are evicted (LRU)
+max_devices: 10000
+
+# Minimum interval between discovery scans (rate limiting)
+# Default: "1m"
+# Prevents accidental tight loops
+min_scan_interval: "1m"
+
+# Memory usage warning threshold in MB
+# Default: 512
+# Logs warning when exceeded, does not stop service
+memory_limit_mb: 512
+```
+
+**Notes:**
+* Resource limits prevent accidental DoS and resource exhaustion
+* Memory baseline: ~50MB + ~1KB per device
+* Adjust limits based on your hardware and network size
+
+### Complete Example
 
 ```yaml
 # Network Discovery
 networks:
-  - "192.168.0.0/24"
-  - "10.0.0.0/16"
+  - "192.168.1.0/24"
+  - "10.0.50.0/24"
+icmp_discovery_interval: "5m"
+snmp_daily_schedule: "02:00"
 
-icmp_discovery_interval: "5m"      # How often to scan for new devices
-snmp_daily_schedule: "02:00"       # Daily SNMP scan time (HH:MM)
-
-# SNMP Settings
+# SNMP
 snmp:
-  community: "${SNMP_COMMUNITY}"   # Expanded from docker-compose environment
+  community: "${SNMP_COMMUNITY}"
   port: 161
   timeout: "5s"
   retries: 1
@@ -288,20 +665,20 @@ ping_interval: "2s"
 ping_timeout: "2s"
 
 # Performance
-icmp_workers: 64                   # Concurrent ICMP workers
-snmp_workers: 32                   # Concurrent SNMP workers
+icmp_workers: 64
+snmp_workers: 32
 
-# InfluxDB (credentials from docker-compose environment)
+# InfluxDB
 influxdb:
   url: "http://localhost:8086"
-  token: "${INFLUXDB_TOKEN}"       # Expanded from docker-compose environment
-  org: "${INFLUXDB_ORG}"           # Expanded from docker-compose environment
+  token: "${INFLUXDB_TOKEN}"
+  org: "${INFLUXDB_ORG}"
   bucket: "netscan"
-  batch_size: 100                  # Batch points before writing (default: 100)
-  flush_interval: "5s"             # Maximum time before flushing (default: 5s)
+  batch_size: 100
+  flush_interval: "5s"
 
 # Health Check
-health_check_port: 8080            # Port for health check HTTP server (default: 8080)
+health_check_port: 8080
 
 # Resource Limits
 max_concurrent_pingers: 1000
@@ -310,453 +687,38 @@ min_scan_interval: "1m"
 memory_limit_mb: 512
 ```
 
-### Docker Environment
+### Environment Variables Reference
 
-The `docker-compose.yml` provides a complete stack with:
+These environment variables are used in config.yml via `${VAR_NAME}` syntax:
 
-- InfluxDB v2.7 for metrics storage
-- Organization: `test-org`
-- Bucket: `netscan`
-- Token: `netscan-token`
-
-## Service Management
-
+**Docker Deployment (via docker-compose.yml or .env file):**
 ```bash
-# View all services status
-docker compose ps
-
-# View logs (all services)
-docker compose logs -f
-
-# View logs (specific service)
-docker compose logs -f netscan
-docker compose logs -f influxdb
-
-# Restart services
-docker compose restart
-
-# Stop services (keeps data)
-docker compose down
-
-# Stop and remove all data
-docker compose down -v
-
-# Rebuild and restart after changes
-docker compose up -d --build
+INFLUXDB_TOKEN=netscan-token              # InfluxDB API token
+INFLUXDB_ORG=test-org                     # InfluxDB organization
+SNMP_COMMUNITY=public                     # SNMPv2c community string
+DOCKER_INFLUXDB_INIT_USERNAME=admin       # InfluxDB admin username
+DOCKER_INFLUXDB_INIT_PASSWORD=admin123    # InfluxDB admin password
+DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=netscan-token  # Same as INFLUXDB_TOKEN
 ```
 
-## Building
-
-The Docker image is built automatically when you run `docker compose up`. To build manually:
-
+**Native Deployment (via /opt/netscan/.env file):**
 ```bash
-# Build the image with docker compose
-docker compose build
-
-# Or build with docker directly
-docker build -t netscan:local .
+INFLUXDB_URL=http://localhost:8086        # InfluxDB server URL
+INFLUXDB_TOKEN=<your-token>               # InfluxDB API token
+INFLUXDB_ORG=<your-org>                   # InfluxDB organization
+INFLUXDB_BUCKET=netscan                   # InfluxDB bucket
+SNMP_COMMUNITY=<your-community>           # SNMPv2c community string
 ```
 
-## Troubleshooting
-
-### Docker Issues
-
-**Container is running but finding 0 devices:**
-
-```bash
-# 1. VERIFY config.yml EXISTS in your directory
-ls -la config.yml
-# If missing, create it: cp config.yml.example config.yml
-
-# 2. CHECK what networks are being scanned
-docker compose logs netscan | grep "discovery"
-
-# 3. VERIFY config.yml is properly mounted in container
-docker exec -it netscan cat /app/config.yml | grep -A 5 "networks:"
-# This should show the networks section from your config.yml
-
-# 4. TEST if config is being read correctly
-docker exec -it netscan ls -la /app/config.yml
-# Should show: -r--r--r-- (read-only, mounted file)
-
-# Common causes:
-# A. config.yml doesn't exist (forgot to cp config.yml.example config.yml)
-#    Solution: Create config.yml from example
-#
-# B. Network ranges don't match your actual network
-#    Solution: Update networks section with YOUR network ranges
-#    Example: If your IP is 192.168.1.100, use 192.168.1.0/24
-#    Even 192.168.0.0/24 and 192.168.1.0/24 are DIFFERENT networks!
-#
-# C. Wrong subnet mask (e.g., /16 instead of /24)
-#    Solution: Use correct CIDR notation for your network
-#
-# D. Container not on host network
-docker inspect netscan | grep NetworkMode
-# Should show: "NetworkMode": "host"
-
-# 5. TEST ping manually from container (replace IP with one from your network)
-docker exec -it netscan ping -c 2 192.168.0.1
-# If this fails, it's a network/permission issue, not config
-
-# 6. CHECK if container has CAP_NET_RAW capability
-docker inspect netscan | grep -A 5 CapAdd
-# Should show: "CAP_NET_RAW"
-```
-
-**Container keeps restarting:**
-
-```bash
-# Check logs for errors
-docker compose logs netscan
-
-# Common causes:
-# 1. Invalid config.yml - verify syntax and network ranges
-# 2. InfluxDB credentials mismatch - check token and org match docker-compose.yml
-# 3. Missing config.yml - ensure file exists and is mounted correctly
-```
-
-**InfluxDB connection failed:**
-
-```bash
-# Verify InfluxDB is healthy
-docker compose ps influxdb
-
-# Check if InfluxDB is accessible
-curl http://localhost:8086/health
-
-# Verify credentials in config.yml match docker-compose.yml:
-# - token: netscan-token
-# - org: test-org
-```
-
-**Can't access network devices:**
-
-```bash
-# Verify host network mode is enabled
-docker inspect netscan | grep NetworkMode
-
-# Check CAP_NET_RAW capability
-docker inspect netscan | grep -A 5 CapAdd
-```
-
-### General Issues
-
-**No Devices Discovered:**
-
-- Verify network ranges in config.yml (e.g., `192.168.1.0/24`)
-- Check firewall rules for ICMP/SNMP
-- Confirm SNMP community string is correct
-- Test with ping manually: `ping <device-ip>`
-
-**Performance Issues:**
-
-- Start with lower worker counts (8 ICMP, 4 SNMP)
-- Monitor CPU usage with `htop` or `top`
-- Adjust based on network latency and CPU cores
-
-## Performance Tuning
-
-**Default Configuration:**
-
-- ICMP Workers: 64 (lightweight, network-bound operations)
-- SNMP Workers: 32 (CPU-intensive protocol parsing)
-- Memory: ~50MB baseline + ~1KB per device
-
-**Recommended Worker Counts:**
-
-| System Type | CPU Cores | ICMP Workers | SNMP Workers | Max Devices |
-|-------------|-----------|--------------|--------------|-------------|
-| Raspberry Pi | 4 | 8 | 4 | 100 |
-| Home Server | 4-8 | 16 | 8 | 500 |
-| Workstation | 8-16 | 32 | 16 | 1000 |
-| Server | 16+ | 64 | 32 | 10000 |
-
-Start with conservative values and monitor CPU usage to adjust for your environment.
-
-## Implementation Details
-
-### Discovery Process (Multi-Ticker Architecture)
-
-The new architecture uses four independent tickers:
-
-1. **ICMP Discovery Ticker** (every `icmp_discovery_interval`, default 5m):
-   - Performs ICMP ping sweep across all configured networks
-   - Adds responsive IPs to StateManager
-   - Triggers immediate SNMP scan for newly discovered devices
-
-2. **Daily SNMP Scan Ticker** (at `snmp_daily_schedule`, e.g., 02:00):
-   - Full SNMP scan of all devices in StateManager
-   - Enriches devices with hostname and sysDescr
-   - Updates device info in InfluxDB
-
-3. **Pinger Reconciliation Ticker** (every 5 seconds):
-   - Ensures every device in StateManager has an active pinger goroutine
-   - Starts pingers for new devices
-   - Stops pingers for removed devices
-   - Maintains consistency between state and running pingers
-
-4. **State Pruning Ticker** (every 1 hour):
-   - Removes devices not seen in last 24 hours
-   - Prevents memory growth from stale devices
-
-### Concurrency Model
-
-- Producer-consumer pattern with buffered channels (256 slots)
-- Context-based cancellation for graceful shutdown
-- sync.WaitGroup for worker lifecycle management
-
-### Metrics Storage
-
-- Measurement: "ping"
-- Tags: "ip", "hostname"
-- Fields: "rtt_ms" (float), "success" (boolean)
-- Batch writes with configurable batch size (default: 100 points) and flush interval (default: 5s)
-
-- Measurement: "device_info"
-- Tags: "ip"
-- Fields: "hostname" (string), "snmp_description" (string)
-- Stored once per device or when SNMP data changes
-
-### Health Check Endpoints
-
-- **`/health`**: Detailed JSON status with device count, uptime, memory, goroutines, and InfluxDB connectivity
-- **`/health/ready`**: Readiness probe (returns 200 if InfluxDB OK, 503 if unavailable)
-- **`/health/live`**: Liveness probe (returns 200 if application running)
-
-These endpoints enable Docker HEALTHCHECK and Kubernetes liveness/readiness probes for automated health monitoring and orchestration.
-
-### Security Model
-
-**Docker Deployment** (this PR):
-
-- **Runs as root user**: Required for ICMP raw socket access in containerized environments
-- **Why root is necessary**: Linux kernel security restrictions prevent non-root users from creating raw ICMP sockets in containers, even with CAP_NET_RAW capability
-- **Isolation maintained**: Container remains isolated from host through Docker's namespace isolation
-- **Minimal attack surface**: Alpine base image (~15MB), only CAP_NET_RAW capability (not full privileged mode)
-- **Read-only config**: Configuration file mounted read-only (`:ro`)
-- **Security trade-off**: Root access required for ping functionality, but container isolation provides security boundary
-
-**Native Deployment** (see [README_NATIVE.md](README_NATIVE.md)):
-
-- **Runs as dedicated service user**: Non-root `netscan` user created by deploy.sh
-- **No shell access**: Service user has `/bin/false` as shell for security
-- **CAP_NET_RAW via setcap**: Binary gets capability via setcap, no root required
-- **Systemd isolation**: Service runs as User=netscan with additional restrictions
-- **Preferred for security**: Non-root execution without containerization limitations
-
-## Testing
-
-### Running Tests
-
-The project includes comprehensive test coverage for all critical components:
-
-```bash
-# Run all tests
-go test ./...
-
-# Run tests with verbose output
-go test -v ./...
-
-# Run tests with race detection (recommended for development)
-go test -race ./...
-
-# Run tests with coverage report
-go test -cover ./...
-
-# Run specific package tests
-go test ./internal/config
-go test ./internal/discovery
-go test ./internal/state
-```
-
-### Test Files
-
-The following test files validate critical functionality:
-
-- **`cmd/netscan/orchestration_test.go`**: Tests the four-ticker orchestration logic, graceful shutdown, pinger reconciliation, and daily SNMP scheduling (11 test functions + 1 benchmark)
-- **`internal/config/config_test.go`**: Tests configuration parsing, validation, and environment variable expansion
-- **`internal/discovery/scanner_test.go`**: Tests ICMP and SNMP scanning algorithms
-- **`internal/influx/writer_test.go`**: Tests InfluxDB client operations, batch writes, and error handling
-- **`internal/monitoring/pinger_test.go`**: Tests continuous ping monitoring logic
-- **`internal/state/manager_test.go`**: Tests device state management
-- **`internal/state/manager_concurrent_test.go`**: Tests thread-safety and concurrent access patterns with race detection
-
-All tests must pass before deploying changes:
-
-```bash
-# Ensure all tests pass
-go test ./...
-
-# Verify no race conditions
-go test -race ./...
-```
-
-## Development
-
-### Local Development with Docker
-
-```bash
-git clone https://github.com/kljama/netscan.git
-cd netscan
-
-# Start InfluxDB for testing
-docker compose up -d influxdb
-
-# Run tests
-go test ./...
-go test -race ./...  # Race detection
-
-# Build and run with changes
-docker compose up -d --build
-```
-
-### Code Quality
-
-```bash
-go fmt ./...    # Format code
-go vet ./...    # Static analysis
-go mod tidy     # Clean dependencies
-```
-
-### Project Structure
-
-```bash
-netscan/
-├── cmd/netscan/           # CLI application and main orchestration
-│   ├── main.go           # Service startup, signal handling, four-ticker orchestration
-│   ├── health.go         # Health check HTTP server with /health, /ready, /live endpoints
-│   └── orchestration_test.go # Comprehensive tests (11 functions) for ticker logic
-├── internal/              # Private application packages
-│   ├── config/           # Configuration parsing and validation
-│   │   ├── config.go     # YAML loading, environment expansion, validation
-│   │   └── config_test.go # Configuration parsing tests
-│   ├── discovery/        # Network device discovery
-│   │   ├── scanner.go    # ICMP/SNMP concurrent scanning workers
-│   │   └── scanner_test.go # Discovery algorithm tests
-│   ├── monitoring/       # Continuous device monitoring
-│   │   ├── pinger.go     # ICMP ping goroutines with metrics collection
-│   │   └── pinger_test.go # Ping monitoring tests
-│   ├── state/            # Thread-safe device state management
-│   │   ├── manager.go    # RWMutex-protected device registry
-│   │   ├── manager_test.go # State management tests
-│   │   └── manager_concurrent_test.go # Thread-safety and concurrency tests
-│   ├── influx/           # Time-series data persistence
-│   │   ├── writer.go     # InfluxDB client with batch writes and background flusher
-│   │   └── writer_test.go # Database write operation tests
-│   └── logger/           # Centralized structured logging
-│       └── logger.go     # Zerolog configuration with JSON/console output
-├── docker-compose.yml    # Test environment (InfluxDB v2.7) with healthcheck
-├── Dockerfile            # Multi-stage build with HEALTHCHECK directive
-├── build.sh             # Simple binary build script
-├── deploy.sh            # Production deployment automation
-├── undeploy.sh          # Complete uninstallation script
-├── config.yml.example   # Configuration template
-├── cliff.toml           # Changelog generation configuration
-└── .github/
-    ├── workflows/
-    │   ├── ci-cd.yml    # GitHub Actions with security scanning (govulncheck, Trivy)
-    │   └── dockerize_netscan.yml # Docker image build and multi-architecture support
-    └── copilot-instructions.md # Comprehensive development guide
-```
-
-### Build and Deployment Files
-
-#### `.dockerignore`
-Specifies files and directories to exclude from Docker build context for faster builds and smaller images. Excludes:
-- Git metadata (`.git/`, `.github/`)
-- Documentation (`README*.md`, `*.md`)
-- Test files (`*_test.go`)
-- Build artifacts and temporary files
-
-#### `.gitignore`
-Git ignore rules to prevent committing sensitive or generated files:
-- Configuration files with credentials (`config.yml`, `.env`)
-- Build artifacts (`netscan` binary, `dist/`)
-- IDE and editor files (`.vscode/`, `.idea/`)
-- Operating system files (`.DS_Store`, `Thumbs.db`)
-
-#### `.env.example`
-Template for environment variables used by Docker Compose. Contains placeholders for:
-- `INFLUXDB_TOKEN`: InfluxDB API authentication token
-- `DOCKER_INFLUXDB_INIT_*`: InfluxDB initialization settings
-- `INFLUXDB_ORG` and `INFLUXDB_BUCKET`: Organization and bucket names
-- `SNMP_COMMUNITY`: SNMPv2c community string
-
-**Usage**: Copy to `.env` and replace with actual credentials:
-```bash
-cp .env.example .env
-chmod 600 .env  # Restrict permissions
-# Edit .env with your credentials
-```
-
-The `.env` file is automatically loaded by Docker Compose and values are injected as environment variables into containers. Config values like `${INFLUXDB_TOKEN}` in `config.yml` are automatically expanded.
-
-#### `docker-verify.sh`
-Verification script that tests the complete Docker deployment workflow:
-- Creates temporary `config.yml` from example
-- Starts Docker Compose stack
-- Waits for services to be healthy
-- Verifies health check endpoints
-- Tests configuration mounting and environment variable expansion
-- Cleans up test deployment
-
-Used in CI/CD pipeline to validate Docker builds work end-to-end.
-
-### Documentation Files
-
-#### `CHANGELOG.md`
-Project changelog tracking all releases and changes. Generated using `git-cliff` (configured via `cliff.toml`). Documents:
-- Version history and release dates
-- New features and enhancements
-- Bug fixes and improvements
-- Breaking changes
-
-#### `LICENSE.md`
-MIT License - Open source license allowing free use, modification, and distribution with attribution.
-
-#### `cliff.toml`
-Configuration for [`git-cliff`](https://github.com/orhun/git-cliff) changelog generator. Defines:
-- Commit message parsing patterns (conventional commits)
-- Changelog sections (Features, Bug Fixes, Performance, etc.)
-- Header and footer templates
-- Tag patterns for version detection
-
-Used to automatically generate `CHANGELOG.md` from git commit history.
-
-### CI/CD Workflows
-
-Located in `.github/workflows/`, these GitHub Actions workflows provide automated testing and deployment:
-
-#### `ci-cd.yml`
-Main continuous integration/continuous deployment pipeline that runs on every push and pull request:
-
-**Quality Checks:**
-- Go build validation (linux-amd64)
-- Full test suite execution with race detection
-- Code coverage reporting
-
-**Security Scanning:**
-- `govulncheck`: Scans Go dependencies for known vulnerabilities
-- `trivy`: Scans filesystem and Docker images for vulnerabilities
-- SARIF report upload to GitHub Security tab
-- Blocks deployment on CRITICAL/HIGH severity findings
-
-**Deployment:**
-- Docker Compose validation using `docker-verify.sh`
-- Ensures complete stack (netscan + InfluxDB) works end-to-end
-- Validates health check endpoints and configuration mounting
-
-#### `dockerize_netscan.yml`
-Docker image build and publishing workflow:
-- Multi-stage Docker build optimization
-- Image size validation (~15MB Alpine-based)
-- Layer caching for faster rebuilds
-- Multi-architecture support (linux/amd64, linux/arm64, linux/arm/v7)
-- Automated image publishing to container registry
-
-Both workflows use caching strategies to optimize build times and include comprehensive error handling and logging.
+**Security Best Practices:**
+* Never commit `.env` files to version control
+* Use `chmod 600 .env` to restrict permissions
+* Generate strong, unique tokens: `openssl rand -base64 32`
+* Change SNMP community from default "public"
+* Rotate credentials regularly
+
+---
 
 ## License
 
-MIT
+MIT License - See LICENSE.md

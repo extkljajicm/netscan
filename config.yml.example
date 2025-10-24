@@ -24,19 +24,9 @@
 # =============================================================================
 # Network ranges to scan (CIDR notation) - supports multiple subnets
 #
-# ⚠️  IMPORTANT: You MUST update these with your actual network ranges!
-# The example ranges below are placeholders and likely won't match your network.
-# If netscan finds 0 devices, it means these ranges are incorrect.
-#
-# How to find your network range:
-# - Run: ip addr (Linux) or ipconfig (Windows)
-# - Look for your IP address (e.g., 192.168.1.100)
-# - Use the network portion with /24 (e.g., 192.168.1.0/24)
-#
 networks:
-  - "192.168.0.0/24"   # ⚠️ EXAMPLE - Replace with your actual network!
-  - "10.0.0.0/16"      # ⚠️ EXAMPLE - Remove if not using this range
-  - "172.16.0.0/12"    # ⚠️ EXAMPLE - Remove if not using this range
+  - "192.168.0.0/24"   # EXAMPLE - Replace with your actual network!
+
 
 # How often to run ICMP discovery to find new devices
 icmp_discovery_interval: "5m"
