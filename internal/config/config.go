@@ -153,26 +153,26 @@ func LoadConfig(path string) (*Config, error) {
 
 	// Set default values if not specified
 	if raw.IcmpWorkers == 0 {
-		raw.IcmpWorkers = 64
+		raw.IcmpWorkers = 256
 	}
 	if raw.SnmpWorkers == 0 {
 		raw.SnmpWorkers = 32
 	}
 	if raw.MaxConcurrentPingers == 0 {
-		raw.MaxConcurrentPingers = 1000 // Default: allow up to 1000 concurrent pingers
+		raw.MaxConcurrentPingers = 80000 // Default: allow up to 80,000 concurrent pingers
 	}
 	if raw.MaxDevices == 0 {
-		raw.MaxDevices = 10000 // Default: allow up to 10,000 devices
+		raw.MaxDevices = 80000 // Default: allow up to 80,000 devices
 	}
 	if minScanInterval == 0 {
 		minScanInterval = 1 * time.Minute // Default: minimum 1 minute between scans
 	}
 	if raw.MemoryLimitMB == 0 {
-		raw.MemoryLimitMB = 512 // Default: 512MB memory limit
+		raw.MemoryLimitMB = 8192 // Default: 8192MB memory limit
 	}
 	// Set InfluxDB batch defaults
 	if raw.InfluxDB.BatchSize == 0 {
-		raw.InfluxDB.BatchSize = 100 // Default: batch 100 points
+		raw.InfluxDB.BatchSize = 1000 // Default: batch 1000 points
 	}
 	if flushInterval == 0 {
 		flushInterval = 5 * time.Second // Default: flush every 5 seconds
@@ -314,17 +314,17 @@ func ValidateConfig(cfg *Config) (string, error) {
 	}
 
 	// Validate resource protection settings
-	if cfg.MaxConcurrentPingers < 1 || cfg.MaxConcurrentPingers > 10000 {
-		return "", fmt.Errorf("max_concurrent_pingers must be between 1 and 10000, got %d", cfg.MaxConcurrentPingers)
+	if cfg.MaxConcurrentPingers < 1 || cfg.MaxConcurrentPingers > 100000 {
+		return "", fmt.Errorf("max_concurrent_pingers must be between 1 and 100000, got %d", cfg.MaxConcurrentPingers)
 	}
-	if cfg.MaxDevices < 1 || cfg.MaxDevices > 50000 {
-		return "", fmt.Errorf("max_devices must be between 1 and 50000, got %d", cfg.MaxDevices)
+	if cfg.MaxDevices < 1 || cfg.MaxDevices > 100000 {
+		return "", fmt.Errorf("max_devices must be between 1 and 100000, got %d", cfg.MaxDevices)
 	}
 	if cfg.MinScanInterval < 30*time.Second {
 		return "", fmt.Errorf("min_scan_interval must be at least 30 seconds, got %v", cfg.MinScanInterval)
 	}
-	if cfg.MemoryLimitMB < 64 || cfg.MemoryLimitMB > 4096 {
-		return "", fmt.Errorf("memory_limit_mb must be between 64 and 4096, got %d", cfg.MemoryLimitMB)
+	if cfg.MemoryLimitMB < 64 || cfg.MemoryLimitMB > 16384 {
+		return "", fmt.Errorf("memory_limit_mb must be between 64 and 16384, got %d", cfg.MemoryLimitMB)
 	}
 
 	return "", nil

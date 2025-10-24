@@ -60,7 +60,7 @@ ping_timeout: "2s"
 # PERFORMANCE TUNING
 # =============================================================================
 # Number of concurrent ICMP ping workers (recommended: 2-4x CPU cores)
-icmp_workers: 64
+icmp_workers: 256
 
 # Number of concurrent SNMP polling workers (recommended: 1-2x CPU cores)
 snmp_workers: 32
@@ -75,7 +75,7 @@ influxdb:
   token: "${INFLUXDB_TOKEN}"  # Default: 'netscan-token' (set via docker-compose.yml or .env)
   org: "${INFLUXDB_ORG}"      # Default: 'test-org' (set via docker-compose.yml or .env)
   bucket: "netscan"
-  batch_size: 100             # Number of points to batch before writing (default: 100)
+  batch_size: 1000            # Number of points to batch before writing (default: 1000)
   flush_interval: "5s"        # Maximum time to hold points before flushing (default: 5s)
 
 # =============================================================================
@@ -89,7 +89,7 @@ health_check_port: 8080       # Port for health check endpoint (default: 8080)
 # RESOURCE PROTECTION SETTINGS
 # =============================================================================
 # Limits to prevent resource exhaustion and DoS attacks
-max_concurrent_pingers: 1000  # Maximum number of concurrent ping goroutines
-max_devices: 10000            # Maximum number of devices to monitor
+max_concurrent_pingers: 80000 # Maximum number of concurrent ping goroutines
+max_devices: 80000            # Maximum number of devices to monitor
 min_scan_interval: "1m"       # Minimum interval between discovery scans
-memory_limit_mb: 512          # Memory usage limit in MB
+memory_limit_mb: 8192         # Memory usage limit in MB
