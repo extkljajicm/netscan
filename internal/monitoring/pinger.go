@@ -3,13 +3,13 @@ package monitoring
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/kljama/netscan/internal/state"
 	probing "github.com/prometheus-community/pro-bing"
+	"github.com/rs/zerolog/log"
 )
 
 // PingWriter interface for writing ping results to external storage
@@ -25,6 +25,16 @@ type StateManager interface {
 
 // StartPinger runs continuous ICMP monitoring for a single device
 func StartPinger(ctx context.Context, wg *sync.WaitGroup, device state.Device, interval time.Duration, writer PingWriter, stateMgr StateManager) {
+	// Panic recovery for pinger goroutine
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().
+				Str("ip", device.IP).
+				Interface("panic", r).
+				Msg("Pinger panic recovered")
+		}
+	}()
+
 	if wg != nil {
 		defer wg.Done()
 	}
@@ -37,40 +47,60 @@ func StartPinger(ctx context.Context, wg *sync.WaitGroup, device state.Device, i
 		case <-ctx.Done():
 			return // Exit on context cancellation
 		case <-ticker.C:
-			log.Printf("Pinging %s...", device.IP)
+			log.Debug().Str("ip", device.IP).Msg("Pinging device")
 
 			// Validate IP address before pinging
 			if err := validateIPAddress(device.IP); err != nil {
-				log.Printf("Invalid IP address for %s: %v", device.IP, err)
+				log.Error().
+					Str("ip", device.IP).
+					Err(err).
+					Msg("Invalid IP address")
 				continue
 			}
 
 			pinger, err := probing.NewPinger(device.IP)
 			if err != nil {
-				log.Printf("Ping error for %s: %v", device.IP, err)
+				log.Error().
+					Str("ip", device.IP).
+					Err(err).
+					Msg("Failed to create pinger")
 				continue // Skip invalid IP configurations
 			}
 			pinger.Count = 1                              // Single ICMP echo request per interval
 			pinger.Timeout = 2 * time.Second              // 2-second ping timeout
 			pinger.SetPrivileged(true)                    // Use raw ICMP sockets (requires root)
 			if err := pinger.Run(); err != nil {
-				log.Printf("Ping run error for %s: %v", device.IP, err)
+				log.Error().
+					Str("ip", device.IP).
+					Err(err).
+					Msg("Ping execution failed")
 				continue // Skip execution errors
 			}
 			stats := pinger.Statistics()
 			if stats.PacketsRecv > 0 {
-				log.Printf("Ping success: %s RTT=%v", device.IP, stats.AvgRtt)
+				log.Debug().
+					Str("ip", device.IP).
+					Dur("rtt", stats.AvgRtt).
+					Msg("Ping successful")
 				// Update last seen timestamp in state manager
 				if stateMgr != nil {
 					stateMgr.UpdateLastSeen(device.IP)
 				}
 				if err := writer.WritePingResult(device.IP, stats.AvgRtt, true); err != nil {
-					log.Printf("Failed to write ping result for %s: %v", device.IP, err)
+					log.Error().
+						Str("ip", device.IP).
+						Err(err).
+						Msg("Failed to write ping result")
 				}
 			} else {
-				log.Printf("Ping failed: %s", device.IP)
+				log.Debug().
+					Str("ip", device.IP).
+					Msg("Ping failed - no response")
 				if err := writer.WritePingResult(device.IP, 0, false); err != nil {
-					log.Printf("Failed to write ping failure for %s: %v", device.IP, err)
+					log.Error().
+						Str("ip", device.IP).
+						Err(err).
+						Msg("Failed to write ping failure")
 				}
 			}
 		}

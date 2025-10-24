@@ -3,7 +3,6 @@ package influx
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"strings"
 	"sync"
@@ -12,6 +11,7 @@ import (
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 	"github.com/influxdata/influxdb-client-go/v2/api"
 	"github.com/influxdata/influxdb-client-go/v2/api/write"
+	"github.com/rs/zerolog/log"
 )
 
 // Writer handles InfluxDB v2 time-series data writes with batching
@@ -57,6 +57,18 @@ func NewWriter(url, token, org, bucket string, batchSize int, flushInterval time
 
 // backgroundFlusher periodically flushes batched points
 func (w *Writer) backgroundFlusher() {
+	// Panic recovery for background goroutine
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().
+				Interface("panic", r).
+				Msg("Background flusher panic recovered")
+		}
+	}()
+
+	// Start error monitoring goroutine
+	go w.monitorWriteErrors()
+
 	for {
 		select {
 		case <-w.ctx.Done():
@@ -64,6 +76,32 @@ func (w *Writer) backgroundFlusher() {
 			return
 		case <-w.flushTicker.C:
 			w.flush()
+		}
+	}
+}
+
+// monitorWriteErrors monitors the write API error channel and logs errors
+func (w *Writer) monitorWriteErrors() {
+	// Panic recovery for error monitor goroutine
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().
+				Interface("panic", r).
+				Msg("Write error monitor panic recovered")
+		}
+	}()
+
+	errorChan := w.writeAPI.Errors()
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case err := <-errorChan:
+			if err != nil {
+				log.Error().
+					Err(err).
+					Msg("InfluxDB write error detected")
+			}
 		}
 	}
 }
@@ -152,7 +190,7 @@ func (w *Writer) addToBatch(point *write.Point) {
 	}
 }
 
-// flush writes all batched points to InfluxDB
+// flush writes all batched points to InfluxDB with retry logic
 func (w *Writer) flush() {
 	w.batchMu.Lock()
 	if len(w.batch) == 0 {
@@ -164,12 +202,54 @@ func (w *Writer) flush() {
 	w.batch = make([]*write.Point, 0, w.batchSize)
 	w.batchMu.Unlock()
 
-	// Write batch to InfluxDB
-	for _, point := range pointsToWrite {
-		w.writeAPI.WritePoint(point)
-	}
+	// Write batch to InfluxDB with retry on failure
+	w.flushWithRetry(pointsToWrite, 3)
+}
 
-	log.Printf("Flushed %d points to InfluxDB", len(pointsToWrite))
+// flushWithRetry attempts to write points with exponential backoff retry
+func (w *Writer) flushWithRetry(points []*write.Point, maxRetries int) {
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// Write all points in the batch
+		for _, point := range points {
+			w.writeAPI.WritePoint(point)
+		}
+
+		// Force a flush to check for immediate errors
+		w.writeAPI.Flush()
+
+		// Wait a short time to see if errors appear
+		time.Sleep(100 * time.Millisecond)
+
+		// Check error channel with timeout
+		select {
+		case err := <-w.writeAPI.Errors():
+			if err != nil {
+				if attempt < maxRetries {
+					backoffDuration := time.Duration(1<<uint(attempt)) * time.Second
+					log.Warn().
+						Err(err).
+						Int("attempt", attempt+1).
+						Int("max_retries", maxRetries).
+						Dur("backoff", backoffDuration).
+						Msg("InfluxDB write failed, retrying with backoff")
+					time.Sleep(backoffDuration)
+					continue
+				} else {
+					log.Error().
+						Err(err).
+						Int("points", len(points)).
+						Msg("InfluxDB write failed after all retries")
+					return
+				}
+			}
+		default:
+			// No error, write successful
+			log.Info().
+				Int("points", len(points)).
+				Msg("Successfully flushed points to InfluxDB")
+			return
+		}
+	}
 }
 
 // Close terminates the InfluxDB client connection

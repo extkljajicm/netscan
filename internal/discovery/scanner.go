@@ -2,7 +2,6 @@ package discovery
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"strings"
 	"sync"
@@ -12,6 +11,7 @@ import (
 	"github.com/kljama/netscan/internal/state"
 	"github.com/gosnmp/gosnmp"
 	probing "github.com/prometheus-community/pro-bing"
+	"github.com/rs/zerolog/log"
 )
 
 // RunScanIPsOnly returns all IP addresses in the specified CIDR range
@@ -34,18 +34,33 @@ func RunICMPSweep(networks []string, workers int) []string {
 
 	// Worker goroutine for ICMP ping probes
 	worker := func() {
+		// Panic recovery for worker goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("ICMP worker panic recovered")
+			}
+		}()
+
 		defer wg.Done()
 		for ip := range jobs {
 			pinger, err := probing.NewPinger(ip)
 			if err != nil {
-				log.Printf("Failed to create pinger for %s: %v", ip, err)
+				log.Debug().
+					Str("ip", ip).
+					Err(err).
+					Msg("Failed to create pinger")
 				continue // Skip invalid IP addresses
 			}
 			pinger.Count = 1                 // Single ping per device
 			pinger.Timeout = 1 * time.Second // 1-second discovery timeout
 			pinger.SetPrivileged(true)       // Use raw sockets for ICMP
 			if err := pinger.Run(); err != nil {
-				log.Printf("Ping failed for %s: %v", ip, err)
+				log.Debug().
+					Str("ip", ip).
+					Err(err).
+					Msg("Ping failed")
 				continue // Skip ping failures
 			}
 			stats := pinger.Statistics()
@@ -63,6 +78,15 @@ func RunICMPSweep(networks []string, workers int) []string {
 
 	// Producer: enqueue all IPs from all CIDR ranges
 	go func() {
+		// Panic recovery for producer goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("ICMP producer panic recovered")
+			}
+		}()
+
 		for _, network := range networks {
 			ips := ipsFromCIDR(network)
 			for _, ip := range ips {
@@ -74,6 +98,15 @@ func RunICMPSweep(networks []string, workers int) []string {
 
 	// Wait for all workers to complete, then close results channel
 	go func() {
+		// Panic recovery for wait goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("ICMP wait goroutine panic recovered")
+			}
+		}()
+
 		wg.Wait()
 		close(results)
 	}()
@@ -103,7 +136,9 @@ func snmpGetWithFallback(params *gosnmp.GoSNMP, oids []string) (*gosnmp.SnmpPack
 			return resp, nil
 		}
 		// All variables returned NoSuchInstance/NoSuchObject, try GetNext
-		log.Printf("Get returned NoSuchInstance for %s, trying GetNext fallback", params.Target)
+		log.Debug().
+			Str("target", params.Target).
+			Msg("Get returned NoSuchInstance, trying GetNext fallback")
 	}
 
 	// Fallback to GetNext for each OID (works when .0 instance doesn't exist)
@@ -158,6 +193,15 @@ func RunSNMPScan(ips []string, snmpConfig *config.SNMPConfig, workers int) []sta
 
 	// Worker goroutine for SNMP queries
 	worker := func() {
+		// Panic recovery for worker goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("SNMP worker panic recovered")
+			}
+		}()
+
 		defer wg.Done()
 		for ip := range jobs {
 			// Configure SNMP connection parameters
@@ -171,7 +215,10 @@ func RunSNMPScan(ips []string, snmpConfig *config.SNMPConfig, workers int) []sta
 			}
 			if err := params.Connect(); err != nil {
 				// SNMP failed, skip this device
-				log.Printf("SNMP connection failed for %s: %v", ip, err)
+				log.Debug().
+					Str("ip", ip).
+					Err(err).
+					Msg("SNMP connection failed")
 				continue
 			}
 			// Query standard MIB-II system OIDs: sysName, sysDescr, sysObjectID
@@ -180,24 +227,36 @@ func RunSNMPScan(ips []string, snmpConfig *config.SNMPConfig, workers int) []sta
 			params.Conn.Close()
 			if err != nil || len(resp.Variables) < 3 {
 				// SNMP query failed, skip this device
-				log.Printf("SNMP query failed for %s: %v", ip, err)
+				log.Debug().
+					Str("ip", ip).
+					Err(err).
+					Msg("SNMP query failed")
 				continue
 			}
 
 			// Validate and sanitize SNMP response data
 			hostname, err := validateSNMPString(resp.Variables[0].Value, "sysName")
 			if err != nil {
-				log.Printf("Invalid sysName for %s: %v", ip, err)
+				log.Debug().
+					Str("ip", ip).
+					Err(err).
+					Msg("Invalid sysName")
 				continue
 			}
 			sysDescr, err := validateSNMPString(resp.Variables[1].Value, "sysDescr")
 			if err != nil {
-				log.Printf("Invalid sysDescr for %s: %v", ip, err)
+				log.Debug().
+					Str("ip", ip).
+					Err(err).
+					Msg("Invalid sysDescr")
 				continue
 			}
 			sysObjectID, err := validateSNMPString(resp.Variables[2].Value, "sysObjectID")
 			if err != nil {
-				log.Printf("Invalid sysObjectID for %s: %v", ip, err)
+				log.Debug().
+					Str("ip", ip).
+					Err(err).
+					Msg("Invalid sysObjectID")
 				continue
 			}
 
@@ -220,6 +279,15 @@ func RunSNMPScan(ips []string, snmpConfig *config.SNMPConfig, workers int) []sta
 
 	// Producer: enqueue all IPs
 	go func() {
+		// Panic recovery for producer goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("SNMP producer panic recovered")
+			}
+		}()
+
 		for _, ip := range ips {
 			jobs <- ip
 		}
@@ -228,6 +296,15 @@ func RunSNMPScan(ips []string, snmpConfig *config.SNMPConfig, workers int) []sta
 
 	// Wait for all workers to complete, then close results channel
 	go func() {
+		// Panic recovery for wait goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("SNMP wait goroutine panic recovered")
+			}
+		}()
+
 		wg.Wait()
 		close(results)
 	}()
@@ -250,6 +327,15 @@ func RunScan(cfg *config.Config) []state.Device {
 
 	// Worker goroutine for SNMP queries
 	worker := func() {
+		// Panic recovery for worker goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("RunScan SNMP worker panic recovered")
+			}
+		}()
+
 		defer wg.Done()
 		for ip := range jobs {
 			// Configure SNMP connection parameters
@@ -315,6 +401,15 @@ func RunScan(cfg *config.Config) []state.Device {
 
 	// Wait for all workers to complete, then close results channel
 	go func() {
+		// Panic recovery for wait goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("RunScan wait goroutine panic recovered")
+			}
+		}()
+
 		wg.Wait()
 		close(results)
 	}()
@@ -332,7 +427,10 @@ func RunPingDiscovery(cidr string, icmpWorkers int) []state.Device {
 	// Calculate buffer size based on network size, capped at reasonable limit
 	_, ipnet, err := net.ParseCIDR(cidr)
 	if err != nil {
-		log.Printf("Invalid CIDR %s: %v", cidr, err)
+		log.Error().
+			Str("cidr", cidr).
+			Err(err).
+			Msg("Invalid CIDR")
 		return []state.Device{}
 	}
 	
@@ -351,6 +449,15 @@ func RunPingDiscovery(cidr string, icmpWorkers int) []state.Device {
 
 	// Worker goroutine for ICMP ping probes
 	worker := func() {
+		// Panic recovery for worker goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("RunPingDiscovery worker panic recovered")
+			}
+		}()
+
 		defer wg.Done()
 		for ip := range jobs {
 			pinger, err := probing.NewPinger(ip)
@@ -390,6 +497,15 @@ func RunPingDiscovery(cidr string, icmpWorkers int) []state.Device {
 
 	// Wait for all workers to complete, then close results channel
 	go func() {
+		// Panic recovery for wait goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("RunPingDiscovery wait goroutine panic recovered")
+			}
+		}()
+
 		wg.Wait()
 		close(results)
 	}()
@@ -412,6 +528,15 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 
 	// Worker goroutine for SNMP queries (only on ping-responsive devices)
 	worker := func() {
+		// Panic recovery for worker goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("RunFullDiscovery SNMP worker panic recovered")
+			}
+		}()
+
 		defer wg.Done()
 		for ip := range jobs {
 			// Configure SNMP connection parameters
@@ -476,7 +601,7 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 	}
 
 	// First, perform ICMP ping sweep to find online devices
-	log.Println("Performing ICMP discovery to find online devices...")
+	log.Info().Msg("Performing ICMP discovery to find online devices")
 	onlineIPs := make([]string, 0)
 
 	var icmpWg sync.WaitGroup
@@ -485,6 +610,15 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 
 	// ICMP worker goroutine
 	icmpWorker := func() {
+		// Panic recovery for worker goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("RunFullDiscovery ICMP worker panic recovered")
+			}
+		}()
+
 		defer icmpWg.Done()
 		for ip := range icmpJobs {
 			pinger, err := probing.NewPinger(ip)
@@ -522,6 +656,15 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 
 	// Wait for ICMP discovery to complete
 	go func() {
+		// Panic recovery for wait goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("RunFullDiscovery ICMP wait goroutine panic recovered")
+			}
+		}()
+
 		icmpWg.Wait()
 		close(icmpResults)
 	}()
@@ -531,7 +674,9 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 		onlineIPs = append(onlineIPs, ip)
 	}
 
-	log.Printf("ICMP discovery found %d online devices, now polling with SNMP...", len(onlineIPs))
+	log.Info().
+		Int("online_devices", len(onlineIPs)).
+		Msg("ICMP discovery complete, starting SNMP polling")
 
 	// Now perform SNMP polling only on online devices
 	// Launch SNMP worker goroutines
@@ -549,6 +694,15 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 
 	// Wait for all SNMP workers to complete
 	go func() {
+		// Panic recovery for wait goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("RunFullDiscovery SNMP wait goroutine panic recovered")
+			}
+		}()
+
 		wg.Wait()
 		close(results)
 	}()

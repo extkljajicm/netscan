@@ -130,6 +130,16 @@ func main() {
 			log.Info().Str("ip", ip).Msg("New device found, performing initial SNMP scan")
 			// Trigger immediate SNMP scan in background
 			go func(newIP string) {
+				// Panic recovery for SNMP scan goroutine
+				defer func() {
+					if r := recover(); r != nil {
+						log.Error().
+							Str("ip", newIP).
+							Interface("panic", r).
+							Msg("Initial SNMP scan panic recovered")
+					}
+				}()
+
 				snmpDevices := discovery.RunSNMPScan([]string{newIP}, &cfg.SNMP, cfg.SnmpWorkers)
 				if len(snmpDevices) > 0 {
 					dev := snmpDevices[0]
@@ -155,6 +165,15 @@ func main() {
 
 	// Shutdown handler
 	go func() {
+		// Panic recovery for shutdown handler
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("Shutdown handler panic recovered")
+			}
+		}()
+
 		<-sigChan
 		log.Info().Msg("Shutdown signal received, stopping all operations...")
 		stop()
@@ -209,6 +228,16 @@ func main() {
 					log.Info().Str("ip", ip).Msg("New device found, performing initial SNMP scan")
 					// Trigger immediate SNMP scan in background
 					go func(newIP string) {
+						// Panic recovery for SNMP scan goroutine
+						defer func() {
+							if r := recover(); r != nil {
+								log.Error().
+									Str("ip", newIP).
+									Interface("panic", r).
+									Msg("Initial SNMP scan panic recovered")
+							}
+						}()
+
 						snmpDevices := discovery.RunSNMPScan([]string{newIP}, &cfg.SNMP, cfg.SnmpWorkers)
 						if len(snmpDevices) > 0 {
 							dev := snmpDevices[0]
@@ -332,7 +361,9 @@ func createDailySNMPChannel(timeStr string) <-chan time.Time {
 	var hour, minute int
 	t, err := time.Parse("15:04", timeStr)
 	if err != nil {
-		log.Printf("Warning: Invalid SNMP daily schedule format %s, using default 02:00", timeStr)
+		log.Warn().
+			Str("schedule", timeStr).
+			Msg("Invalid SNMP daily schedule format, using default 02:00")
 		hour, minute = 2, 0
 	} else {
 		hour = t.Hour()
@@ -342,6 +373,15 @@ func createDailySNMPChannel(timeStr string) <-chan time.Time {
 	ch := make(chan time.Time, 1)
 
 	go func() {
+		// Panic recovery for daily SNMP scheduler
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("Daily SNMP scheduler panic recovered")
+			}
+		}()
+
 		for {
 			// Calculate duration until next scheduled time
 			now := time.Now()
@@ -351,7 +391,10 @@ func createDailySNMPChannel(timeStr string) <-chan time.Time {
 			}
 			durationUntilNext := time.Until(nextRun)
 
-			log.Printf("Next daily SNMP scan scheduled at %s (in %v)", nextRun.Format("2006-01-02 15:04:05"), durationUntilNext)
+			log.Info().
+				Time("next_run", nextRun).
+				Dur("wait_duration", durationUntilNext).
+				Msg("Next daily SNMP scan scheduled")
 
 			// Wait until the scheduled time
 			time.Sleep(durationUntilNext)

@@ -51,6 +51,15 @@ func (hs *HealthServer) Start() error {
 
 	addr := fmt.Sprintf(":%d", hs.port)
 	go func() {
+		// Panic recovery for health server goroutine
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("Health server panic recovered")
+			}
+		}()
+
 		if err := http.ListenAndServe(addr, nil); err != nil {
 			log.Error().Err(err).Msg("Health server error")
 		}
