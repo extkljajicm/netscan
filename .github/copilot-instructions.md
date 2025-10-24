@@ -117,6 +117,42 @@ These are the rules and best practices derived from production implementation. A
 * **Mandate: The InfluxDB schema MUST remain simple.** Do not add fields that are not actively used for monitoring or queries (e.g., `sysObjectID`). The primary schema is `device_info` with `IP`, `hostname`, and `snmp_description`.
 * **Mandate: Log all successful writes to InfluxDB.** Include the device identifier (IP/hostname) in the log message for debugging and confirmation.
 
+### Observability & Monitoring Mandates
+
+* **Mandate: All services MUST expose health status.** Services must provide a way to verify they are running correctly. For network monitoring services like netscan, this includes:
+    * Overall service health (running/degraded/down)
+    * Dependency status (InfluxDB connectivity)
+    * Current operational state (number of active devices, pingers, etc.)
+* **Mandate: Critical metrics MUST be tracked.** Track key performance indicators:
+    * Active device count
+    * Active pinger count
+    * Scan duration (ICMP discovery, SNMP scans)
+    * InfluxDB write success/failure rates
+    * Memory usage
+    * Goroutine count
+* **Mandate: Health checks MUST be Docker-compatible.** When adding health checks:
+    * Implement HTTP endpoint (e.g., `/health`) on a configurable port
+    * Return structured JSON with status details
+    * Support both readiness and liveness concepts
+    * Enable HEALTHCHECK directive in Dockerfile
+    * Support Kubernetes probes format
+
+### Security Scanning & Updates
+
+* **Mandate: Dependencies MUST be scanned for vulnerabilities.** Use automated tools:
+    * Run `govulncheck` in CI/CD pipeline
+    * Scan Docker images with Trivy or similar
+    * Address HIGH and CRITICAL CVEs within 30 days
+    * Document accepted risks for LOW/MEDIUM issues
+* **Mandate: Multi-architecture support SHOULD be considered.** Build for:
+    * linux/amd64 (primary)
+    * linux/arm64 (for ARM servers, newer Raspberry Pi)
+    * linux/arm/v7 (for older Raspberry Pi)
+* **Mandate: SNMPv3 support SHOULD be prioritized.** SNMPv2c uses plain-text community strings. For production security:
+    * Add SNMPv3 support with authentication and encryption
+    * Make SNMPv3 the recommended configuration
+    * Keep SNMPv2c for backward compatibility only
+
 ---
 
 ## Technology Stack
@@ -128,6 +164,11 @@ These are the rules and best practices derived from production implementation. A
     * `github.com/prometheus-community/pro-bing` (ICMP)
     * `github.com/influxdata/influxdb-client-go/v2` (InfluxDB)
     * `sync.RWMutex` (Critical for `StateManager` and `activePingers` map)
+    * `golang.org/x/time/rate` (Rate limiting - already used)
+* **Recommended Additional Libraries**:
+    * `github.com/prometheus/client_golang` (Metrics collection)
+    * `github.com/rs/zerolog` or `go.uber.org/zap` (Structured logging)
+    * `golang.org/x/vuln/cmd/govulncheck` (Vulnerability scanning)
 * **Deployment**:
     * Docker + Docker Compose (primary deployment method)
     * InfluxDB v2.7 container
@@ -152,10 +193,32 @@ These are the rules and best practices derived from production implementation. A
 ### CI/CD Requirements
 * `./netscan --help` must work (flag support required)
 * All unit tests must pass
+* All integration tests must pass (if applicable)
 * Race detection must be clean: `go test -race ./...`
 * Build must succeed with no warnings
+* Security scanning must pass (govulncheck, Trivy)
+* Performance benchmarks must not regress
 * Docker Compose workflow validates full stack deployment
 * Workflow creates config.yml from template and runs `docker compose up`
+* Multi-architecture Docker images must build successfully
+
+### Testing Mandates (Additions)
+
+* **Mandate: Orchestration logic MUST be tested.** The main ticker orchestration in `cmd/netscan/main.go` is critical and must have:
+    * Integration tests for ticker lifecycle
+    * Tests for graceful shutdown behavior
+    * Tests for signal handling
+    * Tests for pinger reconciliation logic
+* **Mandate: Performance benchmarks MUST exist for hot paths.** Track performance over time:
+    * Benchmark ICMP sweeps
+    * Benchmark SNMP scans
+    * Benchmark state manager operations under load
+    * Benchmark InfluxDB write operations
+* **Mandate: Resource limit enforcement MUST be tested.** Verify that:
+    * `max_devices` limit is enforced
+    * `max_concurrent_pingers` limit is enforced
+    * Memory limits trigger warnings
+    * Device eviction works correctly
 
 ---
 
@@ -170,6 +233,155 @@ Follow this workflow when adding a new, recurring task:
 5.  **Orchestration:** Add a new Ticker loop in `cmd/netscan/main.go` to run the new scanner at its configured interval. Ensure it's non-blocking and respects graceful shutdown.
 6.  **Testing:** Add unit tests for the new logic and validation rules. Use interfaces for mocking.
 7.  **Documentation:** Update this file and the `README.md` with the new feature.
+
+---
+
+## Production Readiness Checklist
+
+Before deploying to production, ensure:
+
+### Essential (MUST HAVE)
+- [ ] Health check endpoint implemented and tested
+- [ ] All critical metrics being tracked
+- [ ] Structured logging in place
+- [ ] Resource limits configured appropriately
+- [ ] InfluxDB connection resilience tested
+- [ ] Graceful shutdown working correctly
+- [ ] Configuration validation in place
+- [ ] Security scanning passing (no HIGH/CRITICAL CVEs)
+
+### Recommended (SHOULD HAVE)
+- [ ] Integration tests passing
+- [ ] Performance benchmarks established
+- [ ] Multi-architecture builds available
+- [ ] Kubernetes manifests available (if applicable)
+- [ ] Monitoring dashboard configured (Grafana)
+- [ ] Alert rules configured (InfluxDB/Grafana)
+- [ ] Operational runbook documented
+- [ ] Disaster recovery plan documented
+
+### Optional (NICE TO HAVE)
+- [ ] SNMPv3 support enabled
+- [ ] State persistence configured
+- [ ] IPv6 support enabled
+- [ ] Device grouping/tagging implemented
+- [ ] Webhook alerting configured
+- [ ] Secrets management integrated
+
+---
+
+## Common Implementation Patterns
+
+### Adding a New Ticker
+```go
+// 1. Add configuration parameter
+type Config struct {
+    NewScannerInterval time.Duration `yaml:"new_scanner_interval"`
+}
+
+// 2. Create ticker in main.go
+newScannerTicker := time.NewTicker(cfg.NewScannerInterval)
+defer newScannerTicker.Stop()
+
+// 3. Add to main event loop
+case <-newScannerTicker.C:
+    // Your scan logic here
+    log.Println("Starting new scanner...")
+```
+
+### Adding a New Metric
+```go
+// 1. Define metric in metrics package
+var DevicesScanned = prometheus.NewCounterVec(
+    prometheus.CounterOpts{
+        Name: "netscan_devices_scanned_total",
+        Help: "Total number of devices scanned",
+    },
+    []string{"scan_type"},
+)
+
+// 2. Register metric
+func init() {
+    prometheus.MustRegister(DevicesScanned)
+}
+
+// 3. Increment metric
+DevicesScanned.WithLabelValues("icmp").Inc()
+```
+
+### Adding a New State Field
+```go
+// 1. Update Device struct
+type Device struct {
+    IP       string
+    NewField string  // Add your field
+    LastSeen time.Time
+}
+
+// 2. Add update method
+func (m *Manager) UpdateNewField(ip, value string) {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+    if dev, exists := m.devices[ip]; exists {
+        dev.NewField = value
+    }
+}
+
+// 3. Update tests
+func TestUpdateNewField(t *testing.T) {
+    // Test the new method
+}
+```
+
+---
+
+## Performance Optimization Guidelines
+
+### Batch Operations
+* **InfluxDB Writes:** Batch multiple data points before writing to InfluxDB
+    * Default batch size: 100 points
+    * Default flush interval: 5 seconds
+    * Configurable via `influxdb.batch_size` and `influxdb.flush_interval`
+* **SNMP Queries:** Group OIDs when querying same device to reduce round-trips
+* **Network Operations:** Use worker pools efficiently (already implemented)
+
+### Resource Management
+* **Adaptive Workers:** Consider auto-tuning worker counts based on:
+    * Available CPU cores (`runtime.NumCPU()`)
+    * Network latency
+    * Current load
+* **Circuit Breakers:** For devices that consistently fail:
+    * Stop trying after N consecutive failures
+    * Exponential backoff before retry
+    * Remove from active monitoring (optionally)
+
+### Memory Optimization
+* **Device Eviction:** Already implemented (LRU-style eviction)
+* **Goroutine Pooling:** Reuse goroutines where possible
+* **Buffer Sizing:** Use appropriate channel buffer sizes (currently 256)
+
+---
+
+## Upgrade and Migration Guidelines
+
+### Version Compatibility
+* **Configuration backward compatibility:** New fields must have sensible defaults
+* **State format changes:** Must support migration from previous version
+* **Breaking changes:** Require major version bump and migration guide
+
+### Upgrade Procedure
+1. **Review changelog** for breaking changes
+2. **Backup current state** (if persistence enabled)
+3. **Update configuration** with new fields (optional)
+4. **Test in staging** environment first
+5. **Rolling update** in production (if multiple instances)
+6. **Monitor logs** for errors after upgrade
+7. **Rollback plan** ready if issues occur
+
+### Migration Scripts
+* Provide migration scripts for breaking changes
+* Document manual migration steps clearly
+* Test migration with realistic data volumes
 
 ---
 
