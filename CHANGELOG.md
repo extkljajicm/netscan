@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Health metrics persistence: New decoupled service to periodically write application health metrics to separate InfluxDB bucket
+  - New configuration parameters: `influxdb.health_bucket` (default: "health") and `health_report_interval` (default: "10s")
+  - New Ticker 5: Health Report Loop writes metrics every 10 seconds by default
+  - Dual-bucket architecture in InfluxDB writer with separate WriteAPI for health metrics
+  - New measurement `health_metrics` with fields: device_count, active_pingers, goroutines, memory_mb, influxdb_ok, influxdb_successful_batches, influxdb_failed_batches
+  - Refactored health server to expose public `GetHealthMetrics()` method for reusability
+  - Full backward compatibility: existing config files work without changes (defaults applied)
+
 ### Summary
 
 netscan is a Go network monitoring service (Go 1.25+) targeting linux-amd64 exclusively. The application implements a decoupled, multi-ticker architecture for efficient network device discovery and continuous monitoring.
@@ -14,11 +24,12 @@ netscan is a Go network monitoring service (Go 1.25+) targeting linux-amd64 excl
 ### Core Features
 
 **Multi-Ticker Architecture**
-- Four independent concurrent event loops orchestrated in main.go
+- Five independent concurrent event loops orchestrated in main.go
 - ICMP Discovery Ticker: Finds new devices via ping sweeps (configurable interval, default 5m)
 - Daily SNMP Scan Ticker: Enriches all devices with metadata at scheduled time (e.g., 02:00)
 - Pinger Reconciliation Ticker: Ensures all devices have active monitoring goroutines (every 5s)
 - State Pruning Ticker: Removes stale devices (every 1h, 24h threshold)
+- Health Report Ticker: Writes health metrics to InfluxDB (configurable interval, default 10s)
 
 **Discovery & Monitoring**
 - Concurrent ICMP discovery with configurable worker pools (default: 64 workers)
