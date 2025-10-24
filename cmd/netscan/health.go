@@ -3,13 +3,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"runtime"
 	"time"
 
 	"github.com/kljama/netscan/internal/influx"
 	"github.com/kljama/netscan/internal/state"
+	"github.com/rs/zerolog/log"
 )
 
 // HealthServer provides HTTP health check endpoint
@@ -52,11 +52,11 @@ func (hs *HealthServer) Start() error {
 	addr := fmt.Sprintf(":%d", hs.port)
 	go func() {
 		if err := http.ListenAndServe(addr, nil); err != nil {
-			log.Printf("Health server error: %v", err)
+			log.Error().Err(err).Msg("Health server error")
 		}
 	}()
 
-	log.Printf("Health check endpoint started on %s", addr)
+	log.Info().Str("address", addr).Msg("Health check endpoint started")
 	return nil
 }
 
