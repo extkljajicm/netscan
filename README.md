@@ -18,8 +18,13 @@ Performs decoupled network discovery and monitoring with four independent ticker
 - **Dual-Trigger SNMP**: Immediate scan for new devices + scheduled daily scan for all devices
 - **Concurrent Processing**: Configurable worker pool patterns for scalable network operations
 - **State-Centric Design**: StateManager as single source of truth for all devices
-- **InfluxDB v2**: Time-series metrics storage with point-based writes
-- **Docker Deployment**: Complete stack with Docker Compose
+- **Health Check Endpoint**: HTTP server with `/health`, `/health/ready`, and `/health/live` endpoints for Docker HEALTHCHECK and Kubernetes probes
+- **Batch InfluxDB Writes**: Configurable batching (default: 100 points, 5s flush) reduces network requests by ~99%
+- **Structured Logging**: Machine-parseable JSON logs with zerolog for production debugging and log aggregation
+- **Security Scanning**: Automated CI/CD vulnerability detection with govulncheck and Trivy
+- **Comprehensive Tests**: 11 test functions covering orchestration logic, graceful shutdown, and pinger reconciliation
+- **InfluxDB v2**: Time-series metrics storage with batch writes and health checks
+- **Docker Deployment**: Complete stack with Docker Compose and HEALTHCHECK integration
 - **Security**: Linux capabilities (CAP_NET_RAW) for ICMP access, input validation, and secure credential handling
 
 ## Architecture
@@ -121,6 +126,9 @@ The easiest way to get netscan running is with Docker Compose, which sets up bot
    
    # View InfluxDB logs
    docker compose logs -f influxdb
+   
+   # Check health endpoint
+   curl http://localhost:8080/health | jq
    ```
 
 6. **Access InfluxDB UI** (optional)
@@ -161,10 +169,12 @@ The `docker-compose.yml` configures:
   - Builds from local Dockerfile (Go 1.25)
   - Uses `host` network mode for ICMP/SNMP access to your network
   - Mounts `config.yml` as read-only
+  - Exposes port 8080 for health check endpoint
   - Environment variables from .env file or defaults:
     - `INFLUXDB_TOKEN` (default: netscan-token)
     - `INFLUXDB_ORG` (default: test-org)
     - `SNMP_COMMUNITY` (default: public)
+  - Docker HEALTHCHECK on `/health/live` endpoint
   - Auto-restarts on failure
 
 - **influxdb service**:
@@ -287,6 +297,11 @@ influxdb:
   token: "${INFLUXDB_TOKEN}"       # Expanded from docker-compose environment
   org: "${INFLUXDB_ORG}"           # Expanded from docker-compose environment
   bucket: "netscan"
+  batch_size: 100                  # Batch points before writing (default: 100)
+  flush_interval: "5s"             # Maximum time before flushing (default: 5s)
+
+# Health Check
+health_check_port: 8080            # Port for health check HTTP server (default: 8080)
 
 # Resource Limits
 max_concurrent_pingers: 1000
@@ -496,12 +511,20 @@ The new architecture uses four independent tickers:
 - Measurement: "ping"
 - Tags: "ip", "hostname"
 - Fields: "rtt_ms" (float), "success" (boolean)
-- Point-based writes with error handling
+- Batch writes with configurable batch size (default: 100 points) and flush interval (default: 5s)
 
 - Measurement: "device_info"
 - Tags: "ip"
 - Fields: "hostname" (string), "snmp_description" (string)
 - Stored once per device or when SNMP data changes
+
+### Health Check Endpoints
+
+- **`/health`**: Detailed JSON status with device count, uptime, memory, goroutines, and InfluxDB connectivity
+- **`/health/ready`**: Readiness probe (returns 200 if InfluxDB OK, 503 if unavailable)
+- **`/health/live`**: Liveness probe (returns 200 if application running)
+
+These endpoints enable Docker HEALTHCHECK and Kubernetes liveness/readiness probes for automated health monitoring and orchestration.
 
 ### Security Model
 
@@ -554,8 +577,9 @@ go mod tidy     # Clean dependencies
 ```bash
 netscan/
 ├── cmd/netscan/           # CLI application and main orchestration
-│   ├── main.go           # Service startup, signal handling, discovery loops
-│   └── main_test.go      # Basic package test placeholder
+│   ├── main.go           # Service startup, signal handling, four-ticker orchestration
+│   ├── health.go         # Health check HTTP server with /health, /ready, /live endpoints
+│   └── orchestration_test.go # Comprehensive tests (11 functions) for ticker logic
 ├── internal/              # Private application packages
 │   ├── config/           # Configuration parsing and validation
 │   │   ├── config.go     # YAML loading, environment expansion, validation
@@ -569,17 +593,22 @@ netscan/
 │   ├── state/            # Thread-safe device state management
 │   │   ├── manager.go    # RWMutex-protected device registry
 │   │   └── manager_test.go # State management concurrency tests
-│   └── influx/           # Time-series data persistence
-│       ├── writer.go     # InfluxDB client wrapper with rate limiting
-│       └── writer_test.go # Database write operation tests
-├── docker-compose.yml    # Test environment (InfluxDB v2.7)
+│   ├── influx/           # Time-series data persistence
+│   │   ├── writer.go     # InfluxDB client with batch writes and background flusher
+│   │   └── writer_test.go # Database write operation tests
+│   └── logger/           # Centralized structured logging
+│       └── logger.go     # Zerolog configuration with JSON/console output
+├── docker-compose.yml    # Test environment (InfluxDB v2.7) with healthcheck
+├── Dockerfile            # Multi-stage build with HEALTHCHECK directive
 ├── build.sh             # Simple binary build script
 ├── deploy.sh            # Production deployment automation
 ├── undeploy.sh          # Complete uninstallation script
 ├── config.yml.example   # Configuration template
 ├── cliff.toml           # Changelog generation configuration
-└── .github/workflows/   # CI/CD automation
-    └── ci-cd.yml        # GitHub Actions pipeline
+└── .github/
+    ├── workflows/
+    │   └── ci-cd.yml    # GitHub Actions with security scanning (govulncheck, Trivy)
+    └── copilot-instructions.md # Comprehensive development guide
 ```
 
 ## License

@@ -5,6 +5,53 @@ All notable changes to netscan will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - 2025-10-24
+
+### Added
+- **Health Check Endpoint**: HTTP server with three endpoints for production monitoring
+  - `/health`: Detailed JSON status with device count, uptime, memory, goroutines, and InfluxDB connectivity
+  - `/health/ready`: Readiness probe (returns 200 if InfluxDB OK, 503 if unavailable)
+  - `/health/live`: Liveness probe (returns 200 if application running)
+  - Docker HEALTHCHECK directive integration
+  - Kubernetes probe support for orchestrated deployments
+  - Configurable port via `health_check_port` (default: 8080)
+- **Batch InfluxDB Writes**: Performance-optimized batching system
+  - Points accumulated in memory up to configurable batch size (default: 100)
+  - Automatic flush when batch full or on timer interval (default: 5s)
+  - Background flusher goroutine with graceful shutdown
+  - 99% reduction in InfluxDB requests for large deployments
+  - Configuration fields: `batch_size` and `flush_interval`
+- **Structured Logging**: Machine-parseable JSON logs with zerolog
+  - Context-rich logging with IP addresses, device counts, error details, durations
+  - Production JSON format for log aggregation (ELK, Splunk, etc.)
+  - Development-friendly colored console output
+  - Zero-allocation performance
+  - Configurable log levels (Fatal, Error, Warn, Info, Debug)
+  - New package: `internal/logger`
+- **Security Scanning**: Automated vulnerability detection in CI/CD
+  - govulncheck for Go dependency scanning
+  - Trivy filesystem scan for secrets and misconfigurations
+  - Trivy Docker image scan for OS and library vulnerabilities
+  - GitHub Security integration with SARIF uploads
+  - Blocks deployment on CRITICAL/HIGH vulnerabilities
+- **Comprehensive Orchestration Tests**: Test suite for critical ticker management code
+  - 11 test functions covering ticker lifecycle, shutdown, and reconciliation
+  - Performance benchmark with 1000 devices for regression detection
+  - Race detection clean
+  - 527 lines of production-ready tests in `cmd/netscan/orchestration_test.go`
+- **Dependencies**: 
+  - `github.com/rs/zerolog v1.34.0` for structured logging
+
+### Changed
+- **InfluxDB Writer**: Switched from blocking to non-blocking WriteAPI for batching support
+- **Main Application**: Integrated health server startup and structured logging initialization
+- **Docker Configuration**: Added EXPOSE 8080 and HEALTHCHECK directive
+- **Logging**: Replaced all standard library logging with structured zerolog logging
+- **Documentation**: Consolidated all analysis files into `.github/copilot-instructions.md`
+
+### Removed
+- **Temporary Analysis Files**: Removed 6 analysis documents (ANALYSIS_SUMMARY.md, COPILOT_IMPROVEMENTS.md, COPILOT_INSTRUCTIONS_UPDATE.md, IMPLEMENTATION_GUIDE.md, IMPROVEMENTS_README.md, REFACTORING_SUMMARY.md)
+
 ## [Unreleased] - 2025-10-18
 
 ### Added
@@ -19,7 +66,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CLI**: `-config` flag for specifying custom config file path
 - **SNMP Robustness**: GetNext fallback for devices without standard .0 OID instances
 - **SNMP Type Handling**: Support for both string and byte array OctetString values
-- **Documentation**: `REFACTORING_SUMMARY.md` and `MIGRATION_GUIDE.md` for migration details
 
 ### Changed
 - **InfluxDB Schema**: Simplified device_info measurement with only essential fields (IP, hostname, snmp_description)

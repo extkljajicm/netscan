@@ -157,6 +157,11 @@ influxdb:
   token: "${INFLUXDB_TOKEN}"
   org: "${INFLUXDB_ORG}"
   bucket: "netscan"
+  batch_size: 100             # Batch points before writing (default: 100)
+  flush_interval: "5s"        # Maximum time before flushing (default: 5s)
+
+# Health Check
+health_check_port: 8080       # Port for health check HTTP server (default: 8080)
 
 # Resource Limits
 max_concurrent_pingers: 1000
@@ -283,6 +288,21 @@ Runs the multi-ticker architecture with:
 
 - `-config string`: Path to configuration file (default "config.yml")
 - `-help`: Display usage information
+
+### Health Check Endpoint
+
+Once running, the service exposes a health check HTTP server on port 8080 (configurable via `health_check_port`):
+
+```bash
+# Detailed health status
+curl http://localhost:8080/health | jq
+
+# Readiness probe (for load balancers)
+curl http://localhost:8080/health/ready
+
+# Liveness probe (for process monitors)
+curl http://localhost:8080/health/live
+```
 
 ## Testing
 
