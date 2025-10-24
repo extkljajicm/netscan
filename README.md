@@ -545,6 +545,53 @@ These endpoints enable Docker HEALTHCHECK and Kubernetes liveness/readiness prob
 - **Systemd isolation**: Service runs as User=netscan with additional restrictions
 - **Preferred for security**: Non-root execution without containerization limitations
 
+## Testing
+
+### Running Tests
+
+The project includes comprehensive test coverage for all critical components:
+
+```bash
+# Run all tests
+go test ./...
+
+# Run tests with verbose output
+go test -v ./...
+
+# Run tests with race detection (recommended for development)
+go test -race ./...
+
+# Run tests with coverage report
+go test -cover ./...
+
+# Run specific package tests
+go test ./internal/config
+go test ./internal/discovery
+go test ./internal/state
+```
+
+### Test Files
+
+The following test files validate critical functionality:
+
+- **`cmd/netscan/orchestration_test.go`**: Tests the four-ticker orchestration logic, graceful shutdown, pinger reconciliation, and daily SNMP scheduling (11 test functions + 1 benchmark)
+- **`internal/config/config_test.go`**: Tests configuration parsing, validation, and environment variable expansion
+- **`internal/discovery/scanner_test.go`**: Tests ICMP and SNMP scanning algorithms
+- **`internal/influx/writer_test.go`**: Tests InfluxDB client operations, batch writes, and error handling
+- **`internal/monitoring/pinger_test.go`**: Tests continuous ping monitoring logic
+- **`internal/state/manager_test.go`**: Tests device state management
+- **`internal/state/manager_concurrent_test.go`**: Tests thread-safety and concurrent access patterns with race detection
+
+All tests must pass before deploying changes:
+
+```bash
+# Ensure all tests pass
+go test ./...
+
+# Verify no race conditions
+go test -race ./...
+```
+
 ## Development
 
 ### Local Development with Docker
@@ -592,7 +639,8 @@ netscan/
 │   │   └── pinger_test.go # Ping monitoring tests
 │   ├── state/            # Thread-safe device state management
 │   │   ├── manager.go    # RWMutex-protected device registry
-│   │   └── manager_test.go # State management concurrency tests
+│   │   ├── manager_test.go # State management tests
+│   │   └── manager_concurrent_test.go # Thread-safety and concurrency tests
 │   ├── influx/           # Time-series data persistence
 │   │   ├── writer.go     # InfluxDB client with batch writes and background flusher
 │   │   └── writer_test.go # Database write operation tests
@@ -607,9 +655,107 @@ netscan/
 ├── cliff.toml           # Changelog generation configuration
 └── .github/
     ├── workflows/
-    │   └── ci-cd.yml    # GitHub Actions with security scanning (govulncheck, Trivy)
+    │   ├── ci-cd.yml    # GitHub Actions with security scanning (govulncheck, Trivy)
+    │   └── dockerize_netscan.yml # Docker image build and multi-architecture support
     └── copilot-instructions.md # Comprehensive development guide
 ```
+
+### Build and Deployment Files
+
+#### `.dockerignore`
+Specifies files and directories to exclude from Docker build context for faster builds and smaller images. Excludes:
+- Git metadata (`.git/`, `.github/`)
+- Documentation (`README*.md`, `*.md`)
+- Test files (`*_test.go`)
+- Build artifacts and temporary files
+
+#### `.gitignore`
+Git ignore rules to prevent committing sensitive or generated files:
+- Configuration files with credentials (`config.yml`, `.env`)
+- Build artifacts (`netscan` binary, `dist/`)
+- IDE and editor files (`.vscode/`, `.idea/`)
+- Operating system files (`.DS_Store`, `Thumbs.db`)
+
+#### `.env.example`
+Template for environment variables used by Docker Compose. Contains placeholders for:
+- `INFLUXDB_TOKEN`: InfluxDB API authentication token
+- `DOCKER_INFLUXDB_INIT_*`: InfluxDB initialization settings
+- `INFLUXDB_ORG` and `INFLUXDB_BUCKET`: Organization and bucket names
+- `SNMP_COMMUNITY`: SNMPv2c community string
+
+**Usage**: Copy to `.env` and replace with actual credentials:
+```bash
+cp .env.example .env
+chmod 600 .env  # Restrict permissions
+# Edit .env with your credentials
+```
+
+The `.env` file is automatically loaded by Docker Compose and values are injected as environment variables into containers. Config values like `${INFLUXDB_TOKEN}` in `config.yml` are automatically expanded.
+
+#### `docker-verify.sh`
+Verification script that tests the complete Docker deployment workflow:
+- Creates temporary `config.yml` from example
+- Starts Docker Compose stack
+- Waits for services to be healthy
+- Verifies health check endpoints
+- Tests configuration mounting and environment variable expansion
+- Cleans up test deployment
+
+Used in CI/CD pipeline to validate Docker builds work end-to-end.
+
+### Documentation Files
+
+#### `CHANGELOG.md`
+Project changelog tracking all releases and changes. Generated using `git-cliff` (configured via `cliff.toml`). Documents:
+- Version history and release dates
+- New features and enhancements
+- Bug fixes and improvements
+- Breaking changes
+
+#### `LICENSE.md`
+MIT License - Open source license allowing free use, modification, and distribution with attribution.
+
+#### `cliff.toml`
+Configuration for [`git-cliff`](https://github.com/orhun/git-cliff) changelog generator. Defines:
+- Commit message parsing patterns (conventional commits)
+- Changelog sections (Features, Bug Fixes, Performance, etc.)
+- Header and footer templates
+- Tag patterns for version detection
+
+Used to automatically generate `CHANGELOG.md` from git commit history.
+
+### CI/CD Workflows
+
+Located in `.github/workflows/`, these GitHub Actions workflows provide automated testing and deployment:
+
+#### `ci-cd.yml`
+Main continuous integration/continuous deployment pipeline that runs on every push and pull request:
+
+**Quality Checks:**
+- Go build validation (linux-amd64)
+- Full test suite execution with race detection
+- Code coverage reporting
+
+**Security Scanning:**
+- `govulncheck`: Scans Go dependencies for known vulnerabilities
+- `trivy`: Scans filesystem and Docker images for vulnerabilities
+- SARIF report upload to GitHub Security tab
+- Blocks deployment on CRITICAL/HIGH severity findings
+
+**Deployment:**
+- Docker Compose validation using `docker-verify.sh`
+- Ensures complete stack (netscan + InfluxDB) works end-to-end
+- Validates health check endpoints and configuration mounting
+
+#### `dockerize_netscan.yml`
+Docker image build and publishing workflow:
+- Multi-stage Docker build optimization
+- Image size validation (~15MB Alpine-based)
+- Layer caching for faster rebuilds
+- Multi-architecture support (linux/amd64, linux/arm64, linux/arm/v7)
+- Automated image publishing to container registry
+
+Both workflows use caching strategies to optimize build times and include comprehensive error handling and logging.
 
 ## License
 
