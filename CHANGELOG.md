@@ -5,97 +5,159 @@ All notable changes to netscan will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - 2025-10-24
+## [Unreleased]
 
-### Added
-- **Health Check Endpoint**: HTTP server with three endpoints for production monitoring
-  - `/health`: Detailed JSON status with device count, uptime, memory, goroutines, and InfluxDB connectivity
-  - `/health/ready`: Readiness probe (returns 200 if InfluxDB OK, 503 if unavailable)
-  - `/health/live`: Liveness probe (returns 200 if application running)
-  - Docker HEALTHCHECK directive integration
-  - Kubernetes probe support for orchestrated deployments
-  - Configurable port via `health_check_port` (default: 8080)
-- **Batch InfluxDB Writes**: Performance-optimized batching system
-  - Points accumulated in memory up to configurable batch size (default: 100)
-  - Automatic flush when batch full or on timer interval (default: 5s)
-  - Background flusher goroutine with graceful shutdown
-  - 99% reduction in InfluxDB requests for large deployments
-  - Configuration fields: `batch_size` and `flush_interval`
-- **Structured Logging**: Machine-parseable JSON logs with zerolog
-  - Context-rich logging with IP addresses, device counts, error details, durations
-  - Production JSON format for log aggregation (ELK, Splunk, etc.)
-  - Development-friendly colored console output
-  - Zero-allocation performance
-  - Configurable log levels (Fatal, Error, Warn, Info, Debug)
-  - New package: `internal/logger`
-- **Security Scanning**: Automated vulnerability detection in CI/CD
-  - govulncheck for Go dependency scanning
-  - Trivy filesystem scan for secrets and misconfigurations
-  - Trivy Docker image scan for OS and library vulnerabilities
-  - GitHub Security integration with SARIF uploads
-  - Blocks deployment on CRITICAL/HIGH vulnerabilities
-- **Comprehensive Orchestration Tests**: Test suite for critical ticker management code
-  - 11 test functions covering ticker lifecycle, shutdown, and reconciliation
-  - Performance benchmark with 1000 devices for regression detection
-  - Race detection clean
-  - 527 lines of production-ready tests in `cmd/netscan/orchestration_test.go`
-- **Dependencies**: 
-  - `github.com/rs/zerolog v1.34.0` for structured logging
+### Summary
 
-### Changed
-- **InfluxDB Writer**: Switched from blocking to non-blocking WriteAPI for batching support
-- **Main Application**: Integrated health server startup and structured logging initialization
-- **Docker Configuration**: Added EXPOSE 8080 and HEALTHCHECK directive
-- **Logging**: Replaced all standard library logging with structured zerolog logging
-- **Documentation**: Consolidated all analysis files into `.github/copilot-instructions.md`
+netscan is a production-grade Go network monitoring service (Go 1.25+) targeting linux-amd64 exclusively. The application implements a decoupled, multi-ticker architecture for efficient network device discovery and continuous monitoring.
 
-### Removed
-- **Temporary Analysis Files**: Removed 6 analysis documents (ANALYSIS_SUMMARY.md, COPILOT_IMPROVEMENTS.md, COPILOT_INSTRUCTIONS_UPDATE.md, IMPLEMENTATION_GUIDE.md, IMPROVEMENTS_README.md, REFACTORING_SUMMARY.md)
+### Core Features
 
-## [Unreleased] - 2025-10-18
+**Multi-Ticker Architecture**
+- Four independent concurrent event loops orchestrated in main.go
+- ICMP Discovery Ticker: Finds new devices via ping sweeps (configurable interval, default 5m)
+- Daily SNMP Scan Ticker: Enriches all devices with metadata at scheduled time (e.g., 02:00)
+- Pinger Reconciliation Ticker: Ensures all devices have active monitoring goroutines (every 5s)
+- State Pruning Ticker: Removes stale devices (every 1h, 24h threshold)
 
-### Added
-- **Multi-Ticker Architecture**: Four independent concurrent tickers for decoupled operations
-  - ICMP Discovery Ticker: Finds new devices (configurable interval)
-  - Daily SNMP Scan Ticker: Enriches devices at scheduled time
-  - Pinger Reconciliation Ticker: Ensures all devices monitored
-  - State Pruning Ticker: Removes stale devices (24h)
-- **Dual-Trigger SNMP**: Immediate scan for new devices + scheduled daily scan for all devices
-- **State-Centric Design**: StateManager as single source of truth with thread-safe operations
-- **Configuration**: `snmp_daily_schedule` field for scheduling daily SNMP scans (HH:MM format)
-- **CLI**: `-config` flag for specifying custom config file path
-- **SNMP Robustness**: GetNext fallback for devices without standard .0 OID instances
-- **SNMP Type Handling**: Support for both string and byte array OctetString values
+**Discovery & Monitoring**
+- Concurrent ICMP discovery with configurable worker pools (default: 64 workers)
+- Concurrent SNMP scanning with worker pools (default: 32 workers)
+- Continuous per-device ping monitoring (dedicated goroutine per device, default: 2s interval)
+- Dual-trigger SNMP: Immediate scan on discovery + scheduled daily scan for all devices
+- SNMP robustness: GetNext fallback for device compatibility, handles both string and []byte OctetString types
 
-### Changed
-- **InfluxDB Schema**: Simplified device_info measurement with only essential fields (IP, hostname, snmp_description)
-- **Configuration**: Made `discovery_interval` optional for backward compatibility
+**State Management**
+- Thread-safe StateManager as single source of truth for all devices
+- Device struct: IP, Hostname, SysDescr, LastSeen timestamp
+- LRU eviction when max_devices limit reached (default: 10000)
+- RWMutex protection for all operations
+- Device metadata enrichment via SNMP
 
-### Removed
-- **CLI**: `--icmp-only` flag (no longer needed with multi-ticker architecture)
+**Data Persistence**
+- InfluxDB v2 time-series metrics storage
+- High-performance batching system (default: 100 points per batch, 5s flush interval)
+- Background flusher goroutine with graceful shutdown
+- 99% reduction in database requests vs. unbatched writes
+- Data sanitization and validation before writes
+- Health check on startup (fail-fast if InfluxDB unavailable)
 
-## [Unreleased] - 2025-10-14
+**Observability & Monitoring**
+- HTTP health check server (default port: 8080)
+- Three endpoints: /health (detailed JSON), /health/ready (readiness), /health/live (liveness)
+- Docker HEALTHCHECK directive integration
+- Kubernetes probe support
+- Health metrics: device count, active pingers, InfluxDB stats, memory, goroutines, uptime
 
-### Added
-- Concurrent ICMP/SNMP scanning with configurable worker pools
-- Continuous ICMP ping monitoring with InfluxDB metrics storage
-- Thread-safe device state management with automatic pruning
-- YAML configuration with environment variable support for sensitive values
-- Automated deployment scripts (deploy.sh, undeploy.sh)
-- Docker Compose test environment with InfluxDB
-- Comprehensive unit tests with race detection
-- GitHub Actions CI/CD pipeline
+**Logging**
+- Structured logging with zerolog (zero-allocation performance)
+- Machine-parseable JSON logs for production
+- Colored console output for development
+- Context-rich logging: IP addresses, device counts, durations, errors
+- Log levels: Fatal, Error, Warn, Info, Debug
 
-### Security
-- Environment variable support for credentials (secure .env files)
-- Comprehensive input validation and sanitization
-- Resource protection: rate limiting, memory bounds, goroutine limits
-- Network range validation (prevents dangerous scans)
-- CAP_NET_RAW capability with systemd hardening
+**Testing & Quality**
+- Comprehensive test suite covering orchestration logic (11 test functions, 1 benchmark)
+- 527 lines of integration tests for ticker lifecycle, shutdown, reconciliation
+- Race detection clean: all tests pass with -race flag
+- Unit tests for all packages
+- Performance benchmarks for regression detection
 
-### Dependencies
-- `github.com/gosnmp/gosnmp v1.42.1`
-- `github.com/influxdata/influxdb-client-go/v2 v2.14.0`
-- `github.com/prometheus-community/pro-bing v0.7.0`
-- `gopkg.in/yaml.v3 v3.0.1`
+**Configuration**
+- YAML configuration file with environment variable expansion (${VAR_NAME} syntax)
+- CLI flag support: -config to specify custom config path
+- Backward compatibility: optional discovery_interval field with sensible default
+- Comprehensive validation on startup with clear error messages
+- Resource protection: limits for devices, pingers, memory, scan intervals
+
+**Deployment Options**
+- Docker deployment (recommended): Multi-stage Dockerfile, ~15MB Alpine image, docker-compose.yml
+- Native systemd deployment (alternative): Non-root service user, CAP_NET_RAW via setcap
+- Automated deployment scripts: deploy.sh (install), undeploy.sh (cleanup)
+- Docker verification script for CI/CD
+
+**Security**
+- IP address validation: prevents loopback, multicast, link-local, unspecified addresses
+- SNMP string sanitization: removes null bytes, control characters, validates UTF-8
+- Network range validation: prevents dangerous scans
+- Docker: Runs as root (required for ICMP), container isolation provides security boundary
+- Native: Runs as non-root service user with Linux capabilities
+- Security scanning in CI/CD: govulncheck for Go, Trivy for Docker images
+
+**Performance Optimizations**
+- Lock-free batching via buffered channels
+- Worker pool patterns for concurrent operations
+- Streaming CIDR expansion (no intermediate arrays)
+- Context-based cancellation for clean shutdown
+- WaitGroup tracking for all goroutines
+- Panic recovery on all goroutines
+
+### Technology Stack
+
+- **Language:** Go 1.25.1
+- **Platform:** linux-amd64 (exclusively, multi-architecture deferred)
+- **Dependencies:**
+  - gopkg.in/yaml.v3 v3.0.1 (configuration)
+  - github.com/gosnmp/gosnmp v1.42.1 (SNMP)
+  - github.com/prometheus-community/pro-bing v0.7.0 (ICMP)
+  - github.com/influxdata/influxdb-client-go/v2 v2.14.0 (InfluxDB)
+  - github.com/rs/zerolog v1.34.0 (logging)
+- **Infrastructure:** Docker + Docker Compose, InfluxDB v2.7, Alpine Linux
+
+### Project Structure
+
+```
+netscan/
+├── cmd/netscan/              # Main application
+│   ├── main.go              # Multi-ticker orchestration
+│   ├── health.go            # Health check HTTP server
+│   └── orchestration_test.go # Integration tests
+├── internal/
+│   ├── config/              # YAML parsing, validation
+│   ├── discovery/           # ICMP/SNMP scanning
+│   ├── influx/              # InfluxDB batched writes
+│   ├── logger/              # Structured logging
+│   ├── monitoring/          # Continuous ping monitoring
+│   └── state/               # Thread-safe device registry
+├── .github/
+│   ├── copilot-instructions.md # Comprehensive dev guide
+│   └── workflows/ci-cd.yml  # Security scanning, tests
+├── docker-compose.yml       # Docker stack definition
+├── Dockerfile               # Multi-stage build
+├── config.yml.example       # Configuration template
+├── .env.example             # Environment variables
+├── deploy.sh / undeploy.sh  # Native deployment
+└── README.md / MANUAL.md    # Documentation
+```
+
+### CI/CD Pipeline
+
+- Go build validation (linux-amd64)
+- Full test suite with race detection
+- Security scanning: govulncheck (Go dependencies), Trivy (filesystem + Docker)
+- SARIF report upload to GitHub Security tab
+- Docker Compose workflow validation
+- Blocks deployment on HIGH/CRITICAL vulnerabilities
+
+### Future Work (Deferred)
+
+Complex scalability and platform features intentionally deferred for future releases:
+- Rate limiting & circuit breakers for failing devices
+- SNMP connection pooling
+- Enhanced context propagation with distributed tracing
+- Multi-architecture support (ARM64, ARM v7)
+- SNMPv3 with authentication and encryption
+- IPv6 support
+- State persistence to disk
+- Device grouping & tagging
+- Webhook alerting
+- Prometheus metrics export
+
+### Breaking Changes
+
+None - This is the initial documented release state.
+
+### Upgrade Notes
+
+Not applicable - This changelog documents the current implementation state.
 
