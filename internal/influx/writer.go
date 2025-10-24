@@ -22,6 +22,10 @@ type Writer struct {
 	org            string           // InfluxDB organization name
 	bucket         string           // InfluxDB bucket name
 
+	// Error channels - must be obtained only once from WriteAPI
+	primaryErrorChan <-chan error
+	healthErrorChan  <-chan error
+
 	// Batching fields - using channel for lock-free operation
 	batchChan   chan *write.Point
 	batchSize   int
@@ -43,16 +47,18 @@ func NewWriter(url, token, org, bucket, healthBucket string, batchSize int, flus
 	ctx, cancel := context.WithCancel(context.Background())
 
 	w := &Writer{
-		client:         client,
-		writeAPI:       writeAPI,
-		healthWriteAPI: healthWriteAPI,
-		org:            org,
-		bucket:         bucket,
-		batchChan:      make(chan *write.Point, batchSize*2), // Buffered channel for lock-free writes
-		batchSize:      batchSize,
-		flushTicker:    time.NewTicker(flushInterval),
-		ctx:            ctx,
-		cancel:         cancel,
+		client:           client,
+		writeAPI:         writeAPI,
+		healthWriteAPI:   healthWriteAPI,
+		org:              org,
+		bucket:           bucket,
+		primaryErrorChan: writeAPI.Errors(),     // Call Errors() only once during initialization
+		healthErrorChan:  healthWriteAPI.Errors(), // Call Errors() only once during initialization
+		batchChan:        make(chan *write.Point, batchSize*2), // Buffered channel for lock-free writes
+		batchSize:        batchSize,
+		flushTicker:      time.NewTicker(flushInterval),
+		ctx:              ctx,
+		cancel:           cancel,
 	}
 
 	// Start background flusher
@@ -136,20 +142,19 @@ func (w *Writer) monitorWriteErrors() {
 		}
 	}()
 
-	primaryErrorChan := w.writeAPI.Errors()
-	healthErrorChan := w.healthWriteAPI.Errors()
+	// Use stored error channels (obtained once during initialization)
 	for {
 		select {
 		case <-w.ctx.Done():
 			return
-		case err := <-primaryErrorChan:
+		case err := <-w.primaryErrorChan:
 			if err != nil {
 				log.Error().
 					Err(err).
 					Str("bucket", "primary").
 					Msg("InfluxDB write error detected")
 			}
-		case err := <-healthErrorChan:
+		case err := <-w.healthErrorChan:
 			if err != nil {
 				log.Error().
 					Err(err).
@@ -290,9 +295,9 @@ func (w *Writer) flushWithRetry(points []*write.Point, maxRetries int) {
 		// Wait a short time to see if errors appear
 		time.Sleep(100 * time.Millisecond)
 
-		// Check error channel with timeout
+		// Check error channel with timeout using stored channel reference
 		select {
-		case err := <-w.writeAPI.Errors():
+		case err := <-w.primaryErrorChan:
 			if err != nil {
 				if attempt < maxRetries {
 					backoffDuration := time.Duration(1<<uint(attempt)) * time.Second
