@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
@@ -26,6 +27,10 @@ type Writer struct {
 	flushTicker *time.Ticker
 	ctx         context.Context
 	cancel      context.CancelFunc
+
+	// Metrics tracking with atomic counters
+	successfulBatches atomic.Uint64
+	failedBatches     atomic.Uint64
 }
 
 // NewWriter creates a new InfluxDB writer with batching support
@@ -267,6 +272,8 @@ func (w *Writer) flushWithRetry(points []*write.Point, maxRetries int) {
 					time.Sleep(backoffDuration)
 					continue
 				} else {
+					// Final failure - increment failed counter
+					w.failedBatches.Add(1)
 					log.Error().
 						Err(err).
 						Int("points", len(points)).
@@ -275,13 +282,24 @@ func (w *Writer) flushWithRetry(points []*write.Point, maxRetries int) {
 				}
 			}
 		default:
-			// No error, write successful
+			// No error, write successful - increment success counter
+			w.successfulBatches.Add(1)
 			log.Info().
 				Int("points", len(points)).
 				Msg("Successfully flushed points to InfluxDB")
 			return
 		}
 	}
+}
+
+// GetSuccessfulBatches returns the number of successfully flushed batches
+func (w *Writer) GetSuccessfulBatches() uint64 {
+	return w.successfulBatches.Load()
+}
+
+// GetFailedBatches returns the number of failed batch flush attempts
+func (w *Writer) GetFailedBatches() uint64 {
+	return w.failedBatches.Load()
 }
 
 // Close terminates the InfluxDB client connection

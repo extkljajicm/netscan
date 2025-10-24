@@ -14,32 +14,36 @@ import (
 
 // HealthServer provides HTTP health check endpoint
 type HealthServer struct {
-	stateMgr  *state.Manager
-	writer    *influx.Writer
-	startTime time.Time
-	port      int
+	stateMgr        *state.Manager
+	writer          *influx.Writer
+	startTime       time.Time
+	port            int
+	getPingerCount  func() int
 }
 
 // HealthResponse represents the health check JSON response
 type HealthResponse struct {
-	Status        string    `json:"status"`         // "healthy", "degraded", "unhealthy"
-	Version       string    `json:"version"`        // Version string
-	Uptime        string    `json:"uptime"`         // Human readable uptime
-	DeviceCount   int       `json:"device_count"`   // Number of monitored devices
-	ActivePingers int       `json:"active_pingers"` // Number of active pinger goroutines
-	InfluxDBOK    bool      `json:"influxdb_ok"`    // InfluxDB connectivity status
-	Goroutines    int       `json:"goroutines"`     // Current goroutine count
-	MemoryMB      uint64    `json:"memory_mb"`      // Current memory usage in MB
-	Timestamp     time.Time `json:"timestamp"`      // Current timestamp
+	Status             string    `json:"status"`               // "healthy", "degraded", "unhealthy"
+	Version            string    `json:"version"`              // Version string
+	Uptime             string    `json:"uptime"`               // Human readable uptime
+	DeviceCount        int       `json:"device_count"`         // Number of monitored devices
+	ActivePingers      int       `json:"active_pingers"`       // Number of active pinger goroutines (accurate count)
+	InfluxDBOK         bool      `json:"influxdb_ok"`          // InfluxDB connectivity status
+	InfluxDBSuccessful uint64    `json:"influxdb_successful"`  // Successful batch writes
+	InfluxDBFailed     uint64    `json:"influxdb_failed"`      // Failed batch writes
+	Goroutines         int       `json:"goroutines"`           // Current goroutine count
+	MemoryMB           uint64    `json:"memory_mb"`            // Current memory usage in MB
+	Timestamp          time.Time `json:"timestamp"`            // Current timestamp
 }
 
 // NewHealthServer creates a new health check server
-func NewHealthServer(port int, stateMgr *state.Manager, writer *influx.Writer) *HealthServer {
+func NewHealthServer(port int, stateMgr *state.Manager, writer *influx.Writer, getPingerCount func() int) *HealthServer {
 	return &HealthServer{
-		stateMgr:  stateMgr,
-		writer:    writer,
-		startTime: time.Now(),
-		port:      port,
+		stateMgr:       stateMgr,
+		writer:         writer,
+		startTime:      time.Now(),
+		port:           port,
+		getPingerCount: getPingerCount,
 	}
 }
 
@@ -85,15 +89,17 @@ func (hs *HealthServer) healthHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := HealthResponse{
-		Status:        status,
-		Version:       "1.0.0", // TODO: Get from build-time variable
-		Uptime:        time.Since(hs.startTime).String(),
-		DeviceCount:   hs.stateMgr.Count(),
-		ActivePingers: runtime.NumGoroutine(), // Approximate
-		InfluxDBOK:    influxOK,
-		Goroutines:    runtime.NumGoroutine(),
-		MemoryMB:      m.Alloc / 1024 / 1024,
-		Timestamp:     time.Now(),
+		Status:             status,
+		Version:            "1.0.0", // TODO: Get from build-time variable
+		Uptime:             time.Since(hs.startTime).String(),
+		DeviceCount:        hs.stateMgr.Count(),
+		ActivePingers:      hs.getPingerCount(), // Accurate count from activePingers map
+		InfluxDBOK:         influxOK,
+		InfluxDBSuccessful: hs.writer.GetSuccessfulBatches(),
+		InfluxDBFailed:     hs.writer.GetFailedBatches(),
+		Goroutines:         runtime.NumGoroutine(),
+		MemoryMB:           m.Alloc / 1024 / 1024,
+		Timestamp:          time.Now(),
 	}
 
 	if err := json.NewEncoder(w).Encode(response); err != nil {

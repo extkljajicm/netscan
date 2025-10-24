@@ -64,16 +64,21 @@ func main() {
 		Dur("flush_interval", cfg.InfluxDB.FlushInterval).
 		Msg("InfluxDB connection successful ✓")
 
-	// Start health check endpoint
-	healthServer := NewHealthServer(cfg.HealthCheckPort, stateMgr, writer)
-	if err := healthServer.Start(); err != nil {
-		log.Warn().Err(err).Msg("Health check server failed to start")
-	}
-
 	// Map IP addresses to their pinger cancellation functions
 	// CRITICAL: Protected by mutex to prevent concurrent map access
 	activePingers := make(map[string]context.CancelFunc)
 	var pingersMu sync.Mutex
+
+	// Start health check endpoint with accurate pinger count
+	getPingerCount := func() int {
+		pingersMu.Lock()
+		defer pingersMu.Unlock()
+		return len(activePingers)
+	}
+	healthServer := NewHealthServer(cfg.HealthCheckPort, stateMgr, writer, getPingerCount)
+	if err := healthServer.Start(); err != nil {
+		log.Warn().Err(err).Msg("Health check server failed to start")
+	}
 
 	// WaitGroup for tracking all pinger goroutines
 	var pingerWg sync.WaitGroup
