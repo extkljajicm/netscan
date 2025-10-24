@@ -88,10 +88,8 @@ func RunICMPSweep(networks []string, workers int) []string {
 		}()
 
 		for _, network := range networks {
-			ips := ipsFromCIDR(network)
-			for _, ip := range ips {
-				jobs <- ip
-			}
+			// Stream IPs directly to jobs channel without intermediate array
+			streamIPsFromCIDR(network, jobs)
 		}
 		close(jobs)
 	}()
@@ -378,10 +376,8 @@ func RunScan(cfg *config.Config) []state.Device {
 
 	// Producer: enqueue all IPs from configured CIDR ranges
 	for _, cidr := range cfg.Networks {
-		ips := ipsFromCIDR(cidr)
-		for _, ip := range ips {
-			jobs <- ip
-		}
+		// Stream IPs directly to jobs channel without intermediate array
+		streamIPsFromCIDR(cidr, jobs)
 	}
 	close(jobs)
 
@@ -475,10 +471,7 @@ func RunPingDiscovery(cidr string, icmpWorkers int) []state.Device {
 	}
 
 	// Producer: enqueue all IPs from CIDR range
-	ips := ipsFromCIDR(cidr)
-	for _, ip := range ips {
-		jobs <- ip
-	}
+	streamIPsFromCIDR(cidr, jobs)
 	close(jobs)
 
 	// Wait for all workers to complete, then close results channel
@@ -626,10 +619,8 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 
 	// Producer: enqueue all IPs from all configured networks
 	for _, network := range cfg.Networks {
-		ips := ipsFromCIDR(network)
-		for _, ip := range ips {
-			icmpJobs <- ip
-		}
+		// Stream IPs directly to channel without intermediate array
+		streamIPsFromCIDR(network, icmpJobs)
 	}
 	close(icmpJobs)
 
@@ -694,8 +685,47 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 	return devices
 }
 
+// streamIPsFromCIDR streams IP addresses from CIDR notation directly to a channel
+// This avoids allocating memory for all IPs at once, significantly reducing memory usage
+func streamIPsFromCIDR(cidr string, ipChan chan<- string) {
+	ip, ipnet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		log.Error().
+			Str("cidr", cidr).
+			Err(err).
+			Msg("Invalid CIDR")
+		return
+	}
+	
+	// Calculate network size for safety checks
+	ones, bits := ipnet.Mask.Size()
+	hostBits := bits - ones
+	
+	// For networks larger than /16 (65K hosts), log warning
+	// but still proceed (worker pool will rate-limit actual operations)
+	if hostBits > 16 {
+		log.Warn().
+			Str("cidr", cidr).
+			Int("host_bits", hostBits).
+			Msg("Large network detected - scan may take significant time")
+	}
+	
+	// Stream IPs directly to channel
+	count := 0
+	maxIPs := 1 << uint(hostBits) // Calculate actual network size
+	if maxIPs > 65536 {
+		maxIPs = 65536 // Safety limit
+	}
+	
+	for ip := ip.Mask(ipnet.Mask); ipnet.Contains(ip) && count < maxIPs; incIP(ip) {
+		ipChan <- ip.String()
+		count++
+	}
+}
+
 // ipsFromCIDR expands CIDR notation into individual IP addresses
-// For large networks, this streams IPs via channel to avoid loading all into memory
+// NOTE: This function allocates memory for all IPs. For large networks, use streamIPsFromCIDR instead.
+// This is kept for backward compatibility with RunScanIPsOnly
 func ipsFromCIDR(cidr string) []string {
 	var ips []string
 	ip, ipnet, err := net.ParseCIDR(cidr)

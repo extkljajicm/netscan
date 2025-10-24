@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"sync"
 	"time"
 
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
@@ -21,9 +20,8 @@ type Writer struct {
 	org      string           // InfluxDB organization name
 	bucket   string           // InfluxDB bucket name
 
-	// Batching fields
-	batchMu     sync.Mutex
-	batch       []*write.Point
+	// Batching fields - using channel for lock-free operation
+	batchChan   chan *write.Point
 	batchSize   int
 	flushTicker *time.Ticker
 	ctx         context.Context
@@ -42,7 +40,7 @@ func NewWriter(url, token, org, bucket string, batchSize int, flushInterval time
 		writeAPI:    writeAPI,
 		org:         org,
 		bucket:      bucket,
-		batch:       make([]*write.Point, 0, batchSize),
+		batchChan:   make(chan *write.Point, batchSize*2), // Buffered channel for lock-free writes
 		batchSize:   batchSize,
 		flushTicker: time.NewTicker(flushInterval),
 		ctx:         ctx,
@@ -69,13 +67,52 @@ func (w *Writer) backgroundFlusher() {
 	// Start error monitoring goroutine
 	go w.monitorWriteErrors()
 
+	// Local batch for accumulating points
+	batch := make([]*write.Point, 0, w.batchSize)
+
 	for {
 		select {
 		case <-w.ctx.Done():
-			w.flush() // Final flush on shutdown
+			// Drain remaining points from channel before shutdown
+			w.drainAndFlush(batch)
 			return
+
 		case <-w.flushTicker.C:
-			w.flush()
+			// Time-based flush
+			if len(batch) > 0 {
+				w.flushBatch(batch)
+				batch = make([]*write.Point, 0, w.batchSize)
+			}
+
+		case point := <-w.batchChan:
+			// Accumulate point
+			batch = append(batch, point)
+			
+			// Flush when batch is full
+			if len(batch) >= w.batchSize {
+				w.flushBatch(batch)
+				batch = make([]*write.Point, 0, w.batchSize)
+			}
+		}
+	}
+}
+
+// drainAndFlush drains all remaining points from channel and flushes them
+func (w *Writer) drainAndFlush(currentBatch []*write.Point) {
+	// Collect any remaining points in current batch
+	batch := currentBatch
+
+	// Drain the channel
+	for {
+		select {
+		case point := <-w.batchChan:
+			batch = append(batch, point)
+		default:
+			// Channel is empty
+			if len(batch) > 0 {
+				w.flushBatch(batch)
+			}
+			return
 		}
 	}
 }
@@ -178,32 +215,27 @@ func (w *Writer) WritePingResult(ip string, rtt time.Duration, successful bool) 
 	return nil
 }
 
-// addToBatch adds a point to the batch and flushes if batch is full
+// addToBatch adds a point to the batch channel (lock-free operation)
 func (w *Writer) addToBatch(point *write.Point) {
-	w.batchMu.Lock()
-	w.batch = append(w.batch, point)
-	shouldFlush := len(w.batch) >= w.batchSize
-	w.batchMu.Unlock()
-
-	if shouldFlush {
-		w.flush()
+	select {
+	case w.batchChan <- point:
+		// Point added successfully
+	case <-w.ctx.Done():
+		// Context cancelled, drop point
+	default:
+		// Channel full, log warning but don't block
+		log.Warn().Msg("Batch channel full, dropping point to avoid blocking")
 	}
 }
 
-// flush writes all batched points to InfluxDB with retry logic
-func (w *Writer) flush() {
-	w.batchMu.Lock()
-	if len(w.batch) == 0 {
-		w.batchMu.Unlock()
+// flushBatch writes a batch of points to InfluxDB with retry logic
+func (w *Writer) flushBatch(points []*write.Point) {
+	if len(points) == 0 {
 		return
 	}
 
-	pointsToWrite := w.batch
-	w.batch = make([]*write.Point, 0, w.batchSize)
-	w.batchMu.Unlock()
-
 	// Write batch to InfluxDB with retry on failure
-	w.flushWithRetry(pointsToWrite, 3)
+	w.flushWithRetry(points, 3)
 }
 
 // flushWithRetry attempts to write points with exponential backoff retry
@@ -254,9 +286,9 @@ func (w *Writer) flushWithRetry(points []*write.Point, maxRetries int) {
 
 // Close terminates the InfluxDB client connection
 func (w *Writer) Close() {
-	w.cancel()           // Stop background flusher
+	w.cancel()           // Stop background flusher (which will drain remaining points)
 	w.flushTicker.Stop() // Stop flush ticker
-	w.flush()            // Final flush
+	time.Sleep(100 * time.Millisecond) // Give background flusher time to finish
 	w.writeAPI.Flush()   // Flush write API buffer
 	w.client.Close()
 }
