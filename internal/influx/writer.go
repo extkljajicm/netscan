@@ -3,6 +3,7 @@ package influx
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -10,30 +11,60 @@ import (
 
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 	"github.com/influxdata/influxdb-client-go/v2/api"
+	"github.com/influxdata/influxdb-client-go/v2/api/write"
 )
 
-// Writer handles InfluxDB v2 time-series data writes
+// Writer handles InfluxDB v2 time-series data writes with batching
 type Writer struct {
-	client      influxdb2.Client     // InfluxDB client instance
-	writeAPI    api.WriteAPIBlocking // Blocking write API for synchronous writes
-	org         string               // InfluxDB organization name
-	bucket      string               // InfluxDB bucket name
-	rateLimiter *time.Ticker         // Rate limiter for write operations
-	lastWrite   time.Time            // Last write timestamp for rate limiting
-	mu          sync.Mutex           // Protects rate limiting state
+	client   influxdb2.Client // InfluxDB client instance
+	writeAPI api.WriteAPI     // Non-blocking write API for batching
+	org      string           // InfluxDB organization name
+	bucket   string           // InfluxDB bucket name
+
+	// Batching fields
+	batchMu     sync.Mutex
+	batch       []*write.Point
+	batchSize   int
+	flushTicker *time.Ticker
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
-// NewWriter creates a new InfluxDB writer with blocking write API
-func NewWriter(url, token, org, bucket string) *Writer {
+// NewWriter creates a new InfluxDB writer with batching support
+func NewWriter(url, token, org, bucket string, batchSize int, flushInterval time.Duration) *Writer {
 	client := influxdb2.NewClient(url, token)
-	writeAPI := client.WriteAPIBlocking(org, bucket)
-	return &Writer{
+	writeAPI := client.WriteAPI(org, bucket)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	w := &Writer{
 		client:      client,
 		writeAPI:    writeAPI,
 		org:         org,
 		bucket:      bucket,
-		rateLimiter: time.NewTicker(10 * time.Millisecond), // Allow ~100 writes/second
-		lastWrite:   time.Now(),
+		batch:       make([]*write.Point, 0, batchSize),
+		batchSize:   batchSize,
+		flushTicker: time.NewTicker(flushInterval),
+		ctx:         ctx,
+		cancel:      cancel,
+	}
+
+	// Start background flusher
+	go w.backgroundFlusher()
+
+	return w
+}
+
+// backgroundFlusher periodically flushes batched points
+func (w *Writer) backgroundFlusher() {
+	for {
+		select {
+		case <-w.ctx.Done():
+			w.flush() // Final flush on shutdown
+			return
+		case <-w.flushTicker.C:
+			w.flush()
+		}
 	}
 }
 
@@ -41,17 +72,17 @@ func NewWriter(url, token, org, bucket string) *Writer {
 func (w *Writer) HealthCheck() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	
+
 	// Use the health check API
 	health, err := w.client.Health(ctx)
 	if err != nil {
 		return fmt.Errorf("influxdb health check failed: %v", err)
 	}
-	
+
 	if health.Status != "pass" {
 		return fmt.Errorf("influxdb health status: %s", health.Status)
 	}
-	
+
 	return nil
 }
 
@@ -66,19 +97,18 @@ func (w *Writer) WriteDeviceInfo(ip, hostname, sysDescr string) error {
 	hostname = sanitizeInfluxString(hostname, "hostname")
 	sysDescr = sanitizeInfluxString(sysDescr, "sysDescr")
 
-	// Rate limiting
-	w.rateLimit()
+	p := influxdb2.NewPoint(
+		"device_info",
+		map[string]string{"ip": ip},
+		map[string]interface{}{
+			"hostname":         hostname,
+			"snmp_description": sysDescr,
+		},
+		time.Now(),
+	)
 
-	p := influxdb2.NewPointWithMeasurement("device_info")
-	p.AddTag("ip", ip) // Stable identifier
-	p.AddField("hostname", hostname)
-	p.AddField("snmp_description", sysDescr)
-	p.SetTime(time.Now())
-	
-	// Add timeout to prevent indefinite blocking
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	return w.writeAPI.WritePoint(ctx, p)
+	w.addToBatch(p)
+	return nil
 }
 
 // WritePingResult writes ICMP ping metrics to InfluxDB (optimized for time-series)
@@ -96,38 +126,59 @@ func (w *Writer) WritePingResult(ip string, rtt time.Duration, successful bool) 
 		return fmt.Errorf("invalid RTT value: %v (too high, max 1 minute)", rtt)
 	}
 
-	// Rate limiting
-	w.rateLimit()
+	p := influxdb2.NewPoint(
+		"ping",
+		map[string]string{"ip": ip},
+		map[string]interface{}{
+			"rtt_ms":  float64(rtt.Nanoseconds()) / 1e6,
+			"success": successful,
+		},
+		time.Now(),
+	)
 
-	p := influxdb2.NewPointWithMeasurement("ping")
-	p.AddTag("ip", ip)                                   // Only IP as tag for low cardinality
-	p.AddField("rtt_ms", float64(rtt.Nanoseconds())/1e6) // Convert to float milliseconds
-	p.AddField("success", successful)
-	p.SetTime(time.Now())
-	
-	// Add timeout to prevent indefinite blocking
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	return w.writeAPI.WritePoint(ctx, p)
+	w.addToBatch(p)
+	return nil
+}
+
+// addToBatch adds a point to the batch and flushes if batch is full
+func (w *Writer) addToBatch(point *write.Point) {
+	w.batchMu.Lock()
+	w.batch = append(w.batch, point)
+	shouldFlush := len(w.batch) >= w.batchSize
+	w.batchMu.Unlock()
+
+	if shouldFlush {
+		w.flush()
+	}
+}
+
+// flush writes all batched points to InfluxDB
+func (w *Writer) flush() {
+	w.batchMu.Lock()
+	if len(w.batch) == 0 {
+		w.batchMu.Unlock()
+		return
+	}
+
+	pointsToWrite := w.batch
+	w.batch = make([]*write.Point, 0, w.batchSize)
+	w.batchMu.Unlock()
+
+	// Write batch to InfluxDB
+	for _, point := range pointsToWrite {
+		w.writeAPI.WritePoint(point)
+	}
+
+	log.Printf("Flushed %d points to InfluxDB", len(pointsToWrite))
 }
 
 // Close terminates the InfluxDB client connection
 func (w *Writer) Close() {
-	w.rateLimiter.Stop()
+	w.cancel()           // Stop background flusher
+	w.flushTicker.Stop() // Stop flush ticker
+	w.flush()            // Final flush
+	w.writeAPI.Flush()   // Flush write API buffer
 	w.client.Close()
-}
-
-// rateLimit enforces write rate limiting
-func (w *Writer) rateLimit() {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	// Simple rate limiting: ensure minimum 10ms between writes
-	elapsed := time.Since(w.lastWrite)
-	if elapsed < 10*time.Millisecond {
-		time.Sleep(10*time.Millisecond - elapsed)
-	}
-	w.lastWrite = time.Now()
 }
 
 // validateIPAddress validates IP address format and security constraints

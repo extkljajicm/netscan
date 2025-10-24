@@ -21,10 +21,12 @@ type SNMPConfig struct {
 
 // InfluxDBConfig holds InfluxDB v2 connection parameters
 type InfluxDBConfig struct {
-	URL    string `yaml:"url"`
-	Token  string `yaml:"token"`
-	Org    string `yaml:"org"`
-	Bucket string `yaml:"bucket"`
+	URL           string        `yaml:"url"`
+	Token         string        `yaml:"token"`
+	Org           string        `yaml:"org"`
+	Bucket        string        `yaml:"bucket"`
+	BatchSize     int           `yaml:"batch_size"`      // Number of points to batch before writing
+	FlushInterval time.Duration `yaml:"flush_interval"`  // Maximum time to hold points before flushing
 }
 
 // Config holds all application configuration parameters
@@ -39,6 +41,7 @@ type Config struct {
 	PingTimeout           time.Duration  `yaml:"ping_timeout"`
 	InfluxDB              InfluxDBConfig `yaml:"influxdb"`
 	SNMPDailySchedule     string         `yaml:"snmp_daily_schedule"` // Daily SNMP scan time (HH:MM format)
+	HealthCheckPort       int            `yaml:"health_check_port"`   // HTTP health check endpoint port
 	// Resource protection settings
 	MaxConcurrentPingers int           `yaml:"max_concurrent_pingers"`
 	MaxDevices           int           `yaml:"max_devices"`
@@ -56,16 +59,24 @@ func LoadConfig(path string) (*Config, error) {
 
 	// Raw config struct for YAML parsing with string duration fields
 	var raw struct {
-		DiscoveryInterval     string         `yaml:"discovery_interval"`
-		IcmpDiscoveryInterval string         `yaml:"icmp_discovery_interval"`
-		IcmpWorkers           int            `yaml:"icmp_workers"`
-		SnmpWorkers           int            `yaml:"snmp_workers"`
-		Networks              []string       `yaml:"networks"`
-		SNMP                  SNMPConfig     `yaml:"snmp"`
-		PingInterval          string         `yaml:"ping_interval"`
-		PingTimeout           string         `yaml:"ping_timeout"`
-		InfluxDB              InfluxDBConfig `yaml:"influxdb"`
-		SNMPDailySchedule     string         `yaml:"snmp_daily_schedule"`
+		DiscoveryInterval     string   `yaml:"discovery_interval"`
+		IcmpDiscoveryInterval string   `yaml:"icmp_discovery_interval"`
+		IcmpWorkers           int      `yaml:"icmp_workers"`
+		SnmpWorkers           int      `yaml:"snmp_workers"`
+		Networks              []string `yaml:"networks"`
+		SNMP                  SNMPConfig `yaml:"snmp"`
+		PingInterval          string   `yaml:"ping_interval"`
+		PingTimeout           string   `yaml:"ping_timeout"`
+		InfluxDB              struct {
+			URL           string `yaml:"url"`
+			Token         string `yaml:"token"`
+			Org           string `yaml:"org"`
+			Bucket        string `yaml:"bucket"`
+			BatchSize     int    `yaml:"batch_size"`
+			FlushInterval string `yaml:"flush_interval"`
+		} `yaml:"influxdb"`
+		SNMPDailySchedule     string `yaml:"snmp_daily_schedule"`
+		HealthCheckPort       int    `yaml:"health_check_port"`
 		// Resource protection settings
 		MaxConcurrentPingers int    `yaml:"max_concurrent_pingers"`
 		MaxDevices           int    `yaml:"max_devices"`
@@ -113,6 +124,15 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 
+	// Parse InfluxDB FlushInterval if specified
+	var flushInterval time.Duration
+	if raw.InfluxDB.FlushInterval != "" {
+		flushInterval, err = time.ParseDuration(raw.InfluxDB.FlushInterval)
+		if err != nil {
+			return nil, fmt.Errorf("invalid influxdb.flush_interval: %v", err)
+		}
+	}
+
 	// Set default SNMP timeout if not specified
 	if raw.SNMP.Timeout == 0 {
 		raw.SNMP.Timeout = 5 * time.Second
@@ -137,6 +157,17 @@ func LoadConfig(path string) (*Config, error) {
 	if raw.MemoryLimitMB == 0 {
 		raw.MemoryLimitMB = 512 // Default: 512MB memory limit
 	}
+	// Set InfluxDB batch defaults
+	if raw.InfluxDB.BatchSize == 0 {
+		raw.InfluxDB.BatchSize = 100 // Default: batch 100 points
+	}
+	if flushInterval == 0 {
+		flushInterval = 5 * time.Second // Default: flush every 5 seconds
+	}
+	// Set health check port default
+	if raw.HealthCheckPort == 0 {
+		raw.HealthCheckPort = 8080 // Default: port 8080 for health checks
+	}
 
 	// Apply environment variable expansion to sensitive fields
 	raw.InfluxDB.URL = expandEnv(raw.InfluxDB.URL)
@@ -154,8 +185,16 @@ func LoadConfig(path string) (*Config, error) {
 		SNMP:                  raw.SNMP,
 		PingInterval:          pingInterval,
 		PingTimeout:           pingTimeout,
-		InfluxDB:              raw.InfluxDB,
+		InfluxDB: InfluxDBConfig{
+			URL:           raw.InfluxDB.URL,
+			Token:         raw.InfluxDB.Token,
+			Org:           raw.InfluxDB.Org,
+			Bucket:        raw.InfluxDB.Bucket,
+			BatchSize:     raw.InfluxDB.BatchSize,
+			FlushInterval: flushInterval,
+		},
 		SNMPDailySchedule:     raw.SNMPDailySchedule,
+		HealthCheckPort:       raw.HealthCheckPort,
 		MaxConcurrentPingers:  raw.MaxConcurrentPingers,
 		MaxDevices:            raw.MaxDevices,
 		MinScanInterval:       minScanInterval,

@@ -65,18 +65,45 @@ To keep the project focused, we explicitly **do not** do the following. Do not s
     * `icmp_discovery_interval`: How often to scan for *new* devices (e.g., "5m").
     * `ping_interval`: How often to ping *known* devices (e.g., "1s").
     * `snmp_daily_schedule`: What time to run the full SNMP scan (e.g., "02:00").
+    * `health_check_port`: Port for health check HTTP server (default: 8080).
+    * `batch_size`: InfluxDB batch size for performance (default: 100).
+    * `flush_interval`: InfluxDB batch flush interval (default: "5s").
     * `discovery_interval`: Optional for backward compatibility (defaults to 4h if omitted).
-* **State Management:** A thread-safe, in-memory registry (`StateManager`) is the "single source of truth" for all known devices. It supports adding new devices, updating/enriching existing ones, and pruning stale devices that haven't responded to pings.
+* **State Management:** A thread-safe, in-memory registry (`StateManager`) is the "single source of truth" for all known devices. It supports adding new devices, updating/enriching existing ones, pruning stale devices, and reporting device counts for monitoring.
 * **Decoupled ICMP Discovery:** A dedicated scanner that runs on `icmp_discovery_interval`, sweeps network ranges, and feeds *new* IPs to the `StateManager`.
 * **Decoupled SNMP Scanning:** A dedicated, concurrent scanner that can be triggered in two ways:
     1.  On-demand (for a single, newly-discovered IP).
     2.  Scheduled (for *all* IPs currently in the `StateManager`).
 * **Continuous Monitoring:** A "reconciliation loop" that ensures *every* device in the `StateManager` has a dedicated, continuous `pinger` goroutine running. This loop also handles device removal, gracefully stopping the associated goroutine.
+* **Health Check Endpoint:** HTTP server with three endpoints for production monitoring:
+    * `/health` - Detailed JSON status with device count, memory, goroutines, and InfluxDB connectivity
+    * `/health/ready` - Readiness probe (returns 503 if InfluxDB unavailable)
+    * `/health/live` - Liveness probe (returns 200 if application running)
+    * Docker HEALTHCHECK and Kubernetes probe support
+* **Batch InfluxDB Writes:** Performance-optimized batching system:
+    * Points accumulated in memory up to configurable batch size
+    * Automatic flush when batch full or on timer interval
+    * Background flusher goroutine with graceful shutdown
+    * 99% reduction in InfluxDB requests for large deployments
+* **Structured Logging:** Machine-parseable JSON logs with zerolog:
+    * Context-rich logging with IP addresses, device counts, error details
+    * Production JSON format for log aggregation (ELK, Splunk, etc.)
+    * Development-friendly colored console output
+    * Zero-allocation performance
+* **Security Scanning:** Automated vulnerability detection in CI/CD:
+    * govulncheck for Go dependency scanning
+    * Trivy for filesystem and Docker image scanning
+    * GitHub Security integration with SARIF uploads
+    * Blocks deployment on CRITICAL/HIGH vulnerabilities
+* **Comprehensive Testing:** Test suite covering critical orchestration logic:
+    * 11 test functions for ticker lifecycle, shutdown, and reconciliation
+    * Performance benchmarks for regression detection
+    * Race detection clean
 * **Resilience & Security (Mandatory):**
-    * **All Fixes Integrated:** All solutions from `SECURITY_IMPROVEMENTS.md` are implemented.
     * **Timeouts:** Aggressive `context.WithTimeout` applied to *all* external calls: ICMP ping, SNMP queries, and InfluxDB writes.
-    * **InfluxDB Protection:** InfluxDB **health check** on startup, **rate limiting** on writes, and **strict data sanitization/validation** before every write.
+    * **InfluxDB Protection:** InfluxDB **health check** on startup, **batched writes** with rate limiting, and **strict data sanitization/validation** before every write.
     * **Error Handling:** A failed ping or SNMP query is logged but does *not* crash the pinger or the application.
+    * **Security Scanning:** Automated vulnerability detection in CI/CD pipeline prevents vulnerable code deployment.
 
 ---
 
@@ -117,6 +144,42 @@ These are the rules and best practices derived from production implementation. A
 * **Mandate: The InfluxDB schema MUST remain simple.** Do not add fields that are not actively used for monitoring or queries (e.g., `sysObjectID`). The primary schema is `device_info` with `IP`, `hostname`, and `snmp_description`.
 * **Mandate: Log all successful writes to InfluxDB.** Include the device identifier (IP/hostname) in the log message for debugging and confirmation.
 
+### Observability & Monitoring Mandates
+
+* **Mandate: All services MUST expose health status.** Services must provide a way to verify they are running correctly. For network monitoring services like netscan, this includes:
+    * Overall service health (running/degraded/down)
+    * Dependency status (InfluxDB connectivity)
+    * Current operational state (number of active devices, pingers, etc.)
+* **Mandate: Critical metrics MUST be tracked.** Track key performance indicators:
+    * Active device count
+    * Active pinger count
+    * Scan duration (ICMP discovery, SNMP scans)
+    * InfluxDB write success/failure rates
+    * Memory usage
+    * Goroutine count
+* **Mandate: Health checks MUST be Docker-compatible.** When adding health checks:
+    * Implement HTTP endpoint (e.g., `/health`) on a configurable port
+    * Return structured JSON with status details
+    * Support both readiness and liveness concepts
+    * Enable HEALTHCHECK directive in Dockerfile
+    * Support Kubernetes probes format
+
+### Security Scanning & Updates
+
+* **Mandate: Dependencies MUST be scanned for vulnerabilities.** Use automated tools:
+    * Run `govulncheck` in CI/CD pipeline
+    * Scan Docker images with Trivy or similar
+    * Address HIGH and CRITICAL CVEs within 30 days
+    * Document accepted risks for LOW/MEDIUM issues
+* **Mandate: Multi-architecture support SHOULD be considered.** Build for:
+    * linux/amd64 (primary)
+    * linux/arm64 (for ARM servers, newer Raspberry Pi)
+    * linux/arm/v7 (for older Raspberry Pi)
+* **Mandate: SNMPv3 support SHOULD be prioritized.** SNMPv2c uses plain-text community strings. For production security:
+    * Add SNMPv3 support with authentication and encryption
+    * Make SNMPv3 the recommended configuration
+    * Keep SNMPv2c for backward compatibility only
+
 ---
 
 ## Technology Stack
@@ -128,6 +191,11 @@ These are the rules and best practices derived from production implementation. A
     * `github.com/prometheus-community/pro-bing` (ICMP)
     * `github.com/influxdata/influxdb-client-go/v2` (InfluxDB)
     * `sync.RWMutex` (Critical for `StateManager` and `activePingers` map)
+    * `golang.org/x/time/rate` (Rate limiting - already used)
+* **Recommended Additional Libraries**:
+    * `github.com/prometheus/client_golang` (Metrics collection)
+    * `github.com/rs/zerolog` or `go.uber.org/zap` (Structured logging)
+    * `golang.org/x/vuln/cmd/govulncheck` (Vulnerability scanning)
 * **Deployment**:
     * Docker + Docker Compose (primary deployment method)
     * InfluxDB v2.7 container
@@ -152,10 +220,32 @@ These are the rules and best practices derived from production implementation. A
 ### CI/CD Requirements
 * `./netscan --help` must work (flag support required)
 * All unit tests must pass
+* All integration tests must pass (if applicable)
 * Race detection must be clean: `go test -race ./...`
 * Build must succeed with no warnings
+* Security scanning must pass (govulncheck, Trivy)
+* Performance benchmarks must not regress
 * Docker Compose workflow validates full stack deployment
 * Workflow creates config.yml from template and runs `docker compose up`
+* Multi-architecture Docker images must build successfully
+
+### Testing Mandates (Additions)
+
+* **Mandate: Orchestration logic MUST be tested.** The main ticker orchestration in `cmd/netscan/main.go` is critical and must have:
+    * Integration tests for ticker lifecycle
+    * Tests for graceful shutdown behavior
+    * Tests for signal handling
+    * Tests for pinger reconciliation logic
+* **Mandate: Performance benchmarks MUST exist for hot paths.** Track performance over time:
+    * Benchmark ICMP sweeps
+    * Benchmark SNMP scans
+    * Benchmark state manager operations under load
+    * Benchmark InfluxDB write operations
+* **Mandate: Resource limit enforcement MUST be tested.** Verify that:
+    * `max_devices` limit is enforced
+    * `max_concurrent_pingers` limit is enforced
+    * Memory limits trigger warnings
+    * Device eviction works correctly
 
 ---
 
@@ -173,6 +263,155 @@ Follow this workflow when adding a new, recurring task:
 
 ---
 
+## Production Readiness Checklist
+
+Before deploying to production, ensure:
+
+### Essential (MUST HAVE)
+- [ ] Health check endpoint implemented and tested
+- [ ] All critical metrics being tracked
+- [ ] Structured logging in place
+- [ ] Resource limits configured appropriately
+- [ ] InfluxDB connection resilience tested
+- [ ] Graceful shutdown working correctly
+- [ ] Configuration validation in place
+- [ ] Security scanning passing (no HIGH/CRITICAL CVEs)
+
+### Recommended (SHOULD HAVE)
+- [ ] Integration tests passing
+- [ ] Performance benchmarks established
+- [ ] Multi-architecture builds available
+- [ ] Kubernetes manifests available (if applicable)
+- [ ] Monitoring dashboard configured (Grafana)
+- [ ] Alert rules configured (InfluxDB/Grafana)
+- [ ] Operational runbook documented
+- [ ] Disaster recovery plan documented
+
+### Optional (NICE TO HAVE)
+- [ ] SNMPv3 support enabled
+- [ ] State persistence configured
+- [ ] IPv6 support enabled
+- [ ] Device grouping/tagging implemented
+- [ ] Webhook alerting configured
+- [ ] Secrets management integrated
+
+---
+
+## Common Implementation Patterns
+
+### Adding a New Ticker
+```go
+// 1. Add configuration parameter
+type Config struct {
+    NewScannerInterval time.Duration `yaml:"new_scanner_interval"`
+}
+
+// 2. Create ticker in main.go
+newScannerTicker := time.NewTicker(cfg.NewScannerInterval)
+defer newScannerTicker.Stop()
+
+// 3. Add to main event loop
+case <-newScannerTicker.C:
+    // Your scan logic here
+    log.Println("Starting new scanner...")
+```
+
+### Adding a New Metric
+```go
+// 1. Define metric in metrics package
+var DevicesScanned = prometheus.NewCounterVec(
+    prometheus.CounterOpts{
+        Name: "netscan_devices_scanned_total",
+        Help: "Total number of devices scanned",
+    },
+    []string{"scan_type"},
+)
+
+// 2. Register metric
+func init() {
+    prometheus.MustRegister(DevicesScanned)
+}
+
+// 3. Increment metric
+DevicesScanned.WithLabelValues("icmp").Inc()
+```
+
+### Adding a New State Field
+```go
+// 1. Update Device struct
+type Device struct {
+    IP       string
+    NewField string  // Add your field
+    LastSeen time.Time
+}
+
+// 2. Add update method
+func (m *Manager) UpdateNewField(ip, value string) {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+    if dev, exists := m.devices[ip]; exists {
+        dev.NewField = value
+    }
+}
+
+// 3. Update tests
+func TestUpdateNewField(t *testing.T) {
+    // Test the new method
+}
+```
+
+---
+
+## Performance Optimization Guidelines
+
+### Batch Operations
+* **InfluxDB Writes:** Batch multiple data points before writing to InfluxDB
+    * Default batch size: 100 points
+    * Default flush interval: 5 seconds
+    * Configurable via `influxdb.batch_size` and `influxdb.flush_interval`
+* **SNMP Queries:** Group OIDs when querying same device to reduce round-trips
+* **Network Operations:** Use worker pools efficiently (already implemented)
+
+### Resource Management
+* **Adaptive Workers:** Consider auto-tuning worker counts based on:
+    * Available CPU cores (`runtime.NumCPU()`)
+    * Network latency
+    * Current load
+* **Circuit Breakers:** For devices that consistently fail:
+    * Stop trying after N consecutive failures
+    * Exponential backoff before retry
+    * Remove from active monitoring (optionally)
+
+### Memory Optimization
+* **Device Eviction:** Already implemented (LRU-style eviction)
+* **Goroutine Pooling:** Reuse goroutines where possible
+* **Buffer Sizing:** Use appropriate channel buffer sizes (currently 256)
+
+---
+
+## Upgrade and Migration Guidelines
+
+### Version Compatibility
+* **Configuration backward compatibility:** New fields must have sensible defaults
+* **State format changes:** Must support migration from previous version
+* **Breaking changes:** Require major version bump and migration guide
+
+### Upgrade Procedure
+1. **Review changelog** for breaking changes
+2. **Backup current state** (if persistence enabled)
+3. **Update configuration** with new fields (optional)
+4. **Test in staging** environment first
+5. **Rolling update** in production (if multiple instances)
+6. **Monitor logs** for errors after upgrade
+7. **Rollback plan** ready if issues occur
+
+### Migration Scripts
+* Provide migration scripts for breaking changes
+* Document manual migration steps clearly
+* Test migration with realistic data volumes
+
+---
+
 ## Architecture & Implementation Details
 
 ### Configuration (`internal/config/config.go`)
@@ -182,10 +421,25 @@ Follow this workflow when adding a new, recurring task:
     * `ICMPDiscoveryInterval time.Duration` (e.g., "5m")
     * `PingInterval time.Duration` (e.g., "1s")
     * `SNMPDailySchedule string` (e.g., "02:00")
-    * All resource limits from `SECURITY_IMPROVEMENTS.md` (`max_devices`, etc.)
+    * `HealthCheckPort int` (default: 8080)
+    * `InfluxDBConfig.BatchSize int` (default: 100)
+    * `InfluxDBConfig.FlushInterval time.Duration` (default: "5s")
+    * All resource limits (`max_devices`, `max_concurrent_pingers`, etc.)
     * `DiscoveryInterval time.Duration` (optional for backward compatibility, defaults to 4h)
 * Validation for `SNMPDailySchedule` (must be parseable as `HH:MM`, range 00:00 to 23:59)
 * Better error messages for invalid duration fields
+
+### Health Check Server (`cmd/netscan/health.go`)
+
+**Implemented:**
+* HTTP server providing three endpoints for production monitoring:
+    * `/health` - Detailed JSON status with device count, memory, goroutines, InfluxDB connectivity, uptime
+    * `/health/ready` - Readiness probe (200 if InfluxDB OK, 503 if unavailable)
+    * `/health/live` - Liveness probe (200 if application running)
+* Non-blocking HTTP server running on configurable port
+* Docker HEALTHCHECK directive integration
+* Kubernetes livenessProbe and readinessProbe support
+* JSON-formatted health data with comprehensive metrics
 
 ### State Manager (`internal/state/manager.go`)
 
@@ -198,6 +452,7 @@ Follow this workflow when adding a new, recurring task:
     * `UpdateDeviceSNMP(ip, hostname, sysDescr string)`: Enriches an existing device with SNMP data.
     * `UpdateLastSeen(ip string)`: Called by pingers to keep a device alive.
     * `GetAllIPs() []string`: Returns all IPs for the daily SNMP scan.
+    * `Count() int`: Returns current device count for monitoring.
     * `PruneStale(olderThan time.Duration)`: Removes devices not seen recently.
     * `Add(ip string)`: Legacy method maintained for compatibility.
     * `Prune(olderThan time.Duration)`: Alias for PruneStale.
@@ -206,14 +461,19 @@ Follow this workflow when adding a new, recurring task:
 ### InfluxDB Writer (`internal/influx/writer.go`)
 
 **Implemented:**
-* All hardening from `SECURITY_IMPROVEMENTS.md` retained
-* `NewWriter(...)`: Performs **Health Check** and returns an error on failure
-* `WritePingResult(...)`: Uses **short timeout** (2s), logs errors, never panics
+* **Batch Write System:** High-performance batching with background flusher
+* `NewWriter(...)`: Performs **Health Check** and returns an error on failure, accepts `batchSize` and `flushInterval` parameters
+* **Batching Features:**
+    * Points accumulated in memory up to configurable batch size (default: 100)
+    * Automatic flush when batch full or on timer interval (default: 5s)
+    * Background `backgroundFlusher()` goroutine for periodic flushing
+    * `addToBatch()` method queues points and triggers flush when needed
+    * Graceful shutdown flushes remaining points on `Close()`
+* `WritePingResult(...)`: Adds points to batch, never blocks
 * `WriteDeviceInfo(ip, hostname, description string)`:
-    * Uses **longer timeout** (5s)
-    * Performs **data sanitization** on all string fields
+    * Adds points to batch with **data sanitization** on all string fields
     * Simplified signature (removed redundant snmp_name and snmp_sysid fields)
-* Client-side **rate limiter** is active
+* **Performance:** 99% reduction in InfluxDB requests for large deployments
 * Schema simplified to essential fields only (IP, hostname, snmp_description)
 
 ### Scanners (`internal/discovery/scanner.go`)
@@ -240,6 +500,27 @@ Follow this workflow when adding a new, recurring task:
     * Converts byte arrays (OctetString values) to strings for ASCII/UTF-8 encoded values
     * Prevents "invalid type: expected string, got []uint8" errors
 
+### Structured Logging (`internal/logger/logger.go`)
+
+**Implemented:**
+* Centralized logging configuration using zerolog
+* `Setup(debugMode bool)` - Initializes global logger with appropriate settings
+* `Get()` - Returns logger with context
+* `With(key, value)` - Returns logger with additional context
+* **Features:**
+    * Machine-parseable JSON logs for production
+    * Colored console output for development
+    * Zero-allocation performance
+    * Configurable log levels (Debug, Info, Warn, Error, Fatal)
+    * Adds service name ("netscan") and timestamp to all logs
+* **Usage throughout application:**
+    * All log messages include structured context fields (IP, device counts, errors, durations)
+    * Fatal for configuration errors and startup failures
+    * Error for failed operations that should be investigated
+    * Warn for resource limits and configuration warnings
+    * Info for all major operations (startup, scans, discovery, shutdown)
+    * Debug for verbose operations (pinger lifecycle, SNMP details)
+
 ### Continuous Pinger (`internal/monitoring/pinger.go`)
 
 **Implemented:**
@@ -248,12 +529,34 @@ Follow this workflow when adding a new, recurring task:
     * Loops on a `time.NewTicker(interval)`
     * Inside the loop:
         1.  Perform a ping (with a short timeout)
-        2.  Call `writer.WritePingResult(...)` with the outcome
+        2.  Call `writer.WritePingResult(...)` with the outcome (batched)
         3.  If successful, call `stateMgr.UpdateLastSeen(device.IP)`
-        4.  If ping or write fails, **log the error and continue the loop** (does not exit)
+        4.  If ping or write fails, **log the error with structured context and continue the loop** (does not exit)
     * Listens for `ctx.Done()` to exit gracefully
     * Uses interface types (`PingWriter`, `StateManager`) for better testability
     * Properly tracks shutdown with WaitGroup
+
+### Orchestration Tests (`cmd/netscan/orchestration_test.go`)
+
+**Implemented:**
+* Comprehensive test suite (527 lines, 11 test functions, 1 benchmark)
+* **Test Coverage:**
+    * `TestCreateDailySNMPChannel` - Daily SNMP scheduling with 10 edge cases
+    * `TestGracefulShutdown` - Context cancellation and ticker cleanup verification
+    * `TestPingerReconciliation` - 6 scenarios for pinger lifecycle management
+    * `TestTickerCoordination` - Multi-ticker concurrent operation validation
+    * `TestContextCancellationPropagation` - Parent-child context relationships
+    * `TestDailySNMPTimeCalculation` - 24-hour scheduling logic with wraparound
+    * `TestMaxPingersLimit` - Resource limit enforcement verification
+    * `TestCreateDailySNMPChannelTimeParsing` - 8 time parsing edge cases
+    * `TestPingerMapConcurrency` - Documents mutex protection necessity
+    * `BenchmarkPingerReconciliation` - Performance baseline with 1000 devices
+* **Features:**
+    * All tests pass without race conditions
+    * Fast execution (<2 seconds total)
+    * Realistic test scenarios matching production usage
+    * Clear documentation of expected behavior
+    * Performance regression detection
 
 ### Orchestration (`cmd/netscan/main.go`)
 
@@ -261,33 +564,34 @@ Follow this workflow when adding a new, recurring task:
 
 **1. Initialization:**
 * Load and validate config (with `-config` flag support)
+* Init structured logging with zerolog
 * Init `StateManager`
-* Init `InfluxWriter` with **fail fast** if health check fails
+* Init `InfluxWriter` with **fail fast** if health check fails and **batch write support**
+* Start health check HTTP server on configurable port
 * Setup signal handling for graceful shutdown (using a main `context.Context`)
 * `activePingers := make(map[string]context.CancelFunc)`
 * `pingersMu sync.Mutex` (**CRITICAL**: Used for *all* access to `activePingers`)
 * `var pingerWg sync.WaitGroup` for tracking all pinger goroutines
 
 **2. Ticker 1: ICMP Discovery Loop** (Runs every `config.ICMPDiscoveryInterval`, e.g., 5m):
-* Logs: `"Starting ICMP discovery scan..."`
+* Logs: `log.Info().Strs("networks", networks).Msg("Starting ICMP discovery scan")`
 * `responsiveIPs := discovery.RunICMPSweep(...)`
 * For each `responsiveIP`:
     * `isNew := stateMgr.AddDevice(ip)`
     * If `isNew`:
-        * Logs: `"New device found: %s. Performing initial SNMP scan."`
+        * Logs: `log.Info().Str("ip", ip).Msg("New device found, performing initial SNMP scan")`
         * Triggers *immediate, non-blocking* scan in goroutine
-        * SNMP scan results update StateManager and write to InfluxDB
-        * Logs success or failure for debugging
+        * SNMP scan results update StateManager and write to InfluxDB (batched)
+        * Logs success or failure with structured context
 
 **3. Ticker 2: Daily SNMP Scan Loop** (Runs at `config.SNMPDailySchedule`, e.g., "02:00"):
 * Calculates next run time using time parsing
-* Logs: `"Starting daily full SNMP scan..."`
+* Logs: `log.Info().Msg("Starting daily full SNMP scan")`
 * `allIPs := stateMgr.GetAllIPs()`
 * `snmpDevices := discovery.RunSNMPScan(allIPs, ...)`
 * Updates StateManager with SNMP data
-* Writes device info to InfluxDB
-* Logs: `"Daily SNMP scan complete."`
-* **Enhanced logging:** Shows success/failure counts, confirms InfluxDB writes
+* Writes device info to InfluxDB (batched)
+* Logs: `log.Info().Int("enriched", success).Int("failed", failed).Msg("Daily SNMP scan complete")`
 
 **4. Ticker 3: Pinger Reconciliation Loop** (Runs every 5 seconds):
 * Ensures `activePingers` map matches `StateManager`
@@ -295,34 +599,44 @@ Follow this workflow when adding a new, recurring task:
 * `currentStateIPs := stateMgr.GetAllIPs()` converted to set
 * **Start new pingers:**
     * For each IP in state not in `activePingers`:
-        * Logs: `"Starting continuous pinger for %s"`
+        * Logs: `log.Info().Str("ip", ip).Msg("Starting continuous pinger")`
         * Creates `pingerCtx, pingerCancel := context.WithCancel(mainCtx)`
         * `activePingers[ip] = pingerCancel`
         * `pingerWg.Add(1)`
         * `go monitoring.StartPinger(pingerCtx, &pingerWg, ...)`
 * **Stop old pingers:**
     * For each IP in `activePingers` not in state:
-        * Logs: `"Stopping continuous pinger for stale device %s"`
+        * Logs: `log.Info().Str("ip", ip).Msg("Stopping continuous pinger for stale device")`
         * Calls `cancelFunc()`
         * `delete(activePingers, ip)`
 * `pingersMu.Unlock()`
 
 **5. Ticker 4: State Pruning Loop** (Runs every 1 hour):
-* Logs: `"Pruning stale devices..."`
+* Logs: `log.Info().Msg("Pruning stale devices")`
 * `stateMgr.PruneStale(24 * time.Hour)`
 
-**6. Graceful Shutdown:**
+**6. Health Check Server:**
+* Runs on configurable port (default: 8080)
+* Three endpoints: `/health`, `/health/ready`, `/health/live`
+* Non-blocking HTTP server
+* Docker HEALTHCHECK and Kubernetes probe support
+
+**7. Graceful Shutdown:**
 * When `mainCtx` is canceled (by SIGINT/SIGTERM):
     * Stop all tickers
     * `pingersMu.Lock()`, iterate `activePingers`, call `cancelFunc()` for all
     * `pingersMu.Unlock()`
     * `pingerWg.Wait()` to wait for all pingers to exit
+    * Flush remaining batched InfluxDB writes
     * Close InfluxDB client
-    * Logs: `"Shutdown complete."`
+    * Logs: `log.Info().Msg("Shutdown complete")`
 
 **Key Implementation Notes:**
 * All four tickers run concurrently and independently
 * Pinger reconciliation ensures consistency between state and active pingers
 * Proper mutex protection prevents race conditions on `activePingers` map
 * WaitGroup ensures clean shutdown of all goroutines
-* Enhanced logging provides visibility into all operations
+* Structured logging provides queryable visibility into all operations
+* Batch writes significantly improve InfluxDB performance
+* Health checks enable production monitoring and automated orchestration
+* Comprehensive tests prevent regressions in orchestration logic

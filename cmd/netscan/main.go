@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
 	"os"
 	"os/signal"
 	"runtime"
@@ -14,41 +13,62 @@ import (
 	"github.com/kljama/netscan/internal/config"
 	"github.com/kljama/netscan/internal/discovery"
 	"github.com/kljama/netscan/internal/influx"
+	"github.com/kljama/netscan/internal/logger"
 	"github.com/kljama/netscan/internal/monitoring"
 	"github.com/kljama/netscan/internal/state"
+	"github.com/rs/zerolog/log"
 )
 
 func main() {
 	configPath := flag.String("config", "config.yml", "Path to configuration file")
 	flag.Parse()
 
-	log.Println("netscan starting up...")
+	// Initialize structured logging
+	logger.Setup(false) // Set to true for debug mode
+
+	log.Info().Msg("netscan starting up...")
 	cfg, err := config.LoadConfig(*configPath)
 	if err != nil {
-		log.Fatalf("failed to load config: %v", err)
+		log.Fatal().Err(err).Msg("failed to load config")
 	}
 
 	// Validate configuration for security and sanity
 	warning, err := config.ValidateConfig(cfg)
 	if err != nil {
-		log.Fatalf("invalid configuration: %v", err)
+		log.Fatal().Err(err).Msg("invalid configuration")
 	}
 	if warning != "" {
-		log.Printf("Configuration warning: %s", warning)
+		log.Warn().Str("warning", warning).Msg("Configuration warning")
 	}
 
 	// Initialize state manager (single source of truth for devices)
 	stateMgr := state.NewManager(cfg.MaxDevices)
 
-	// Initialize InfluxDB writer with health check
-	writer := influx.NewWriter(cfg.InfluxDB.URL, cfg.InfluxDB.Token, cfg.InfluxDB.Org, cfg.InfluxDB.Bucket)
+	// Initialize InfluxDB writer with health check and batching
+	writer := influx.NewWriter(
+		cfg.InfluxDB.URL,
+		cfg.InfluxDB.Token,
+		cfg.InfluxDB.Org,
+		cfg.InfluxDB.Bucket,
+		cfg.InfluxDB.BatchSize,
+		cfg.InfluxDB.FlushInterval,
+	)
 	defer writer.Close()
 
-	log.Println("Checking InfluxDB connectivity...")
+	log.Info().Msg("Checking InfluxDB connectivity...")
 	if err := writer.HealthCheck(); err != nil {
-		log.Fatalf("InfluxDB connection failed: %v", err)
+		log.Fatal().Err(err).Msg("InfluxDB connection failed")
 	}
-	log.Println("InfluxDB connection successful ✓")
+	log.Info().
+		Int("batch_size", cfg.InfluxDB.BatchSize).
+		Dur("flush_interval", cfg.InfluxDB.FlushInterval).
+		Msg("InfluxDB connection successful ✓")
+
+	// Start health check endpoint
+	healthServer := NewHealthServer(cfg.HealthCheckPort, stateMgr, writer)
+	if err := healthServer.Start(); err != nil {
+		log.Warn().Err(err).Msg("Health check server failed to start")
+	}
 
 	// Map IP addresses to their pinger cancellation functions
 	// CRITICAL: Protected by mutex to prevent concurrent map access
@@ -70,7 +90,10 @@ func main() {
 		runtime.ReadMemStats(&m)
 		memoryMB := m.Alloc / 1024 / 1024
 		if memoryMB > uint64(cfg.MemoryLimitMB) {
-			log.Printf("WARNING: Memory usage (%d MB) exceeds limit (%d MB)", memoryMB, cfg.MemoryLimitMB)
+			log.Warn().
+				Uint64("memory_mb", memoryMB).
+				Int("limit_mb", cfg.MemoryLimitMB).
+				Msg("Memory usage exceeds limit")
 		}
 	}
 
@@ -96,15 +119,15 @@ func main() {
 	defer pruningTicker.Stop()
 
 	// Run initial ICMP discovery at startup
-	log.Println("Starting ICMP discovery scan...")
-	log.Printf("Scanning networks: %v", cfg.Networks)
+	log.Info().Msg("Starting ICMP discovery scan...")
+	log.Info().Strs("networks", cfg.Networks).Msg("Scanning networks")
 	responsiveIPs := discovery.RunICMPSweep(cfg.Networks, cfg.IcmpWorkers)
-	log.Printf("ICMP discovery found %d online devices", len(responsiveIPs))
+	log.Info().Int("devices_found", len(responsiveIPs)).Msg("ICMP discovery completed")
 	
 	for _, ip := range responsiveIPs {
 		isNew := stateMgr.AddDevice(ip)
 		if isNew {
-			log.Printf("New device found: %s. Performing initial SNMP scan.", ip)
+			log.Info().Str("ip", ip).Msg("New device found, performing initial SNMP scan")
 			// Trigger immediate SNMP scan in background
 			go func(newIP string) {
 				snmpDevices := discovery.RunSNMPScan([]string{newIP}, &cfg.SNMP, cfg.SnmpWorkers)
@@ -113,12 +136,18 @@ func main() {
 					stateMgr.UpdateDeviceSNMP(dev.IP, dev.Hostname, dev.SysDescr, dev.SysObjectID)
 					// Write device info to InfluxDB
 					if err := writer.WriteDeviceInfo(dev.IP, dev.Hostname, dev.SysDescr); err != nil {
-						log.Printf("Failed to write device info for %s: %v", dev.IP, err)
+						log.Error().
+							Str("ip", dev.IP).
+							Err(err).
+							Msg("Failed to write device info to InfluxDB")
 					} else {
-						log.Printf("Device enriched and written to InfluxDB: %s (%s)", dev.IP, dev.Hostname)
+						log.Info().
+							Str("ip", dev.IP).
+							Str("hostname", dev.Hostname).
+							Msg("Device enriched and written to InfluxDB")
 					}
 				} else {
-					log.Printf("SNMP scan failed for new device %s, will retry in next daily scan", newIP)
+					log.Debug().Str("ip", newIP).Msg("SNMP scan failed, will retry in next daily scan")
 				}
 			}(ip)
 		}
@@ -127,24 +156,24 @@ func main() {
 	// Shutdown handler
 	go func() {
 		<-sigChan
-		log.Println("Shutdown signal received. Stopping all operations...")
+		log.Info().Msg("Shutdown signal received, stopping all operations...")
 		stop()
 	}()
 
-	log.Printf("Starting monitoring loops...")
-	log.Printf("- ICMP Discovery: every %v", cfg.IcmpDiscoveryInterval)
+	log.Info().Msg("Starting monitoring loops...")
+	log.Info().Dur("icmp_interval", cfg.IcmpDiscoveryInterval).Msg("ICMP Discovery interval")
 	if cfg.SNMPDailySchedule != "" {
-		log.Printf("- Daily SNMP Scan: at %s", cfg.SNMPDailySchedule)
+		log.Info().Str("schedule", cfg.SNMPDailySchedule).Msg("Daily SNMP Scan schedule")
 	}
-	log.Printf("- Pinger Reconciliation: every 5s")
-	log.Printf("- State Pruning: every 1h")
+	log.Info().Msg("Pinger Reconciliation: every 5s")
+	log.Info().Msg("State Pruning: every 1h")
 
 	// Main event loop with all tickers
 	for {
 		select {
 		case <-mainCtx.Done():
 			// Graceful shutdown
-			log.Println("Shutting down all pingers...")
+			log.Info().Msg("Shutting down all pingers...")
 			
 			// Stop all tickers
 			icmpDiscoveryTicker.Stop()
@@ -154,30 +183,30 @@ func main() {
 			// Cancel all active pingers
 			pingersMu.Lock()
 			for ip, cancel := range activePingers {
-				log.Printf("Stopping pinger for %s", ip)
+				log.Debug().Str("ip", ip).Msg("Stopping pinger")
 				cancel()
 			}
 			pingersMu.Unlock()
 			
 			// Wait for all pingers to exit
-			log.Println("Waiting for all pingers to stop...")
+			log.Info().Msg("Waiting for all pingers to stop...")
 			pingerWg.Wait()
 			
-			log.Println("Shutdown complete.")
+			log.Info().Msg("Shutdown complete")
 			return
 
 		case <-icmpDiscoveryTicker.C:
 			// ICMP Discovery: Find new devices
 			checkMemoryUsage()
-			log.Println("Starting ICMP discovery scan...")
-			log.Printf("Scanning networks: %v", cfg.Networks)
+			log.Info().Msg("Starting ICMP discovery scan...")
+			log.Info().Strs("networks", cfg.Networks).Msg("Scanning networks")
 			responsiveIPs := discovery.RunICMPSweep(cfg.Networks, cfg.IcmpWorkers)
-			log.Printf("ICMP discovery found %d online devices", len(responsiveIPs))
+			log.Info().Int("devices_found", len(responsiveIPs)).Msg("ICMP discovery completed")
 			
 			for _, ip := range responsiveIPs {
 				isNew := stateMgr.AddDevice(ip)
 				if isNew {
-					log.Printf("New device found: %s. Performing initial SNMP scan.", ip)
+					log.Info().Str("ip", ip).Msg("New device found, performing initial SNMP scan")
 					// Trigger immediate SNMP scan in background
 					go func(newIP string) {
 						snmpDevices := discovery.RunSNMPScan([]string{newIP}, &cfg.SNMP, cfg.SnmpWorkers)
@@ -186,12 +215,18 @@ func main() {
 							stateMgr.UpdateDeviceSNMP(dev.IP, dev.Hostname, dev.SysDescr, dev.SysObjectID)
 							// Write device info to InfluxDB
 							if err := writer.WriteDeviceInfo(dev.IP, dev.Hostname, dev.SysDescr); err != nil {
-								log.Printf("Failed to write device info for %s: %v", dev.IP, err)
+								log.Error().
+									Str("ip", dev.IP).
+									Err(err).
+									Msg("Failed to write device info to InfluxDB")
 							} else {
-								log.Printf("Device enriched and written to InfluxDB: %s (%s)", dev.IP, dev.Hostname)
+								log.Info().
+									Str("ip", dev.IP).
+									Str("hostname", dev.Hostname).
+									Msg("Device enriched and written to InfluxDB")
 							}
 						} else {
-							log.Printf("SNMP scan failed for new device %s, will retry in next daily scan", newIP)
+							log.Debug().Str("ip", newIP).Msg("SNMP scan failed, will retry in next daily scan")
 						}
 					}(ip)
 				}
@@ -199,24 +234,33 @@ func main() {
 
 		case <-dailySNMPChan:
 			// Daily SNMP Scan: Full scan of all known devices
-			log.Println("Starting daily full SNMP scan...")
+			log.Info().Msg("Starting daily full SNMP scan...")
 			allIPs := stateMgr.GetAllIPs()
-			log.Printf("Performing SNMP scan on %d devices...", len(allIPs))
+			log.Info().Int("device_count", len(allIPs)).Msg("Performing SNMP scan on devices")
 			snmpDevices := discovery.RunSNMPScan(allIPs, &cfg.SNMP, cfg.SnmpWorkers)
-			log.Printf("SNMP scan complete, enriched %d devices (failed: %d)", len(snmpDevices), len(allIPs)-len(snmpDevices))
+			log.Info().
+				Int("enriched", len(snmpDevices)).
+				Int("failed", len(allIPs)-len(snmpDevices)).
+				Msg("SNMP scan complete")
 			
 			successCount := 0
 			for _, dev := range snmpDevices {
 				stateMgr.UpdateDeviceSNMP(dev.IP, dev.Hostname, dev.SysDescr, dev.SysObjectID)
 				// Write device info to InfluxDB
 				if err := writer.WriteDeviceInfo(dev.IP, dev.Hostname, dev.SysDescr); err != nil {
-					log.Printf("Failed to write device info for %s: %v", dev.IP, err)
+					log.Error().
+						Str("ip", dev.IP).
+						Err(err).
+						Msg("Failed to write device info to InfluxDB")
 				} else {
-					log.Printf("Device info written to InfluxDB: %s (%s)", dev.IP, dev.Hostname)
+					log.Info().
+						Str("ip", dev.IP).
+						Str("hostname", dev.Hostname).
+						Msg("Device info written to InfluxDB")
 					successCount++
 				}
 			}
-			log.Printf("Daily SNMP scan complete. Successfully written to InfluxDB: %d devices", successCount)
+			log.Info().Int("success_count", successCount).Msg("Daily SNMP scan complete")
 
 		case <-reconciliationTicker.C:
 			// Pinger Reconciliation: Ensure all devices have pingers
@@ -233,10 +277,13 @@ func main() {
 			for ip := range currentIPMap {
 				if _, exists := activePingers[ip]; !exists {
 					if len(activePingers) >= cfg.MaxConcurrentPingers {
-						log.Printf("Maximum concurrent pingers (%d) reached, skipping %s", cfg.MaxConcurrentPingers, ip)
+						log.Warn().
+							Int("max_pingers", cfg.MaxConcurrentPingers).
+							Str("ip", ip).
+							Msg("Maximum concurrent pingers reached, skipping device")
 						continue
 					}
-					log.Printf("Starting continuous pinger for %s", ip)
+					log.Debug().Str("ip", ip).Msg("Starting continuous pinger")
 					pingerCtx, pingerCancel := context.WithCancel(mainCtx)
 					activePingers[ip] = pingerCancel
 					
@@ -254,7 +301,7 @@ func main() {
 			// Stop pingers for removed devices
 			for ip, cancelFunc := range activePingers {
 				if !currentIPMap[ip] {
-					log.Printf("Stopping continuous pinger for stale device %s", ip)
+					log.Debug().Str("ip", ip).Msg("Stopping continuous pinger for stale device")
 					cancelFunc()
 					delete(activePingers, ip)
 				}
@@ -264,12 +311,15 @@ func main() {
 
 		case <-pruningTicker.C:
 			// State Pruning: Remove devices not seen recently
-			log.Println("Pruning stale devices...")
+			log.Info().Msg("Pruning stale devices...")
 			pruned := stateMgr.PruneStale(24 * time.Hour)
 			if len(pruned) > 0 {
-				log.Printf("Pruned %d stale devices", len(pruned))
+				log.Info().Int("count", len(pruned)).Msg("Pruned stale devices")
 				for _, dev := range pruned {
-					log.Printf("Pruned device: %s (%s)", dev.IP, dev.Hostname)
+					log.Debug().
+						Str("ip", dev.IP).
+						Str("hostname", dev.Hostname).
+						Msg("Pruned device")
 				}
 			}
 		}

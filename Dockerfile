@@ -24,8 +24,8 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
 # Stage 2: Create minimal runtime image
 FROM alpine:latest
 
-# Install runtime dependencies
-RUN apk add --no-cache ca-certificates libcap
+# Install runtime dependencies (including wget for healthcheck)
+RUN apk add --no-cache ca-certificates libcap wget
 
 # Create non-root user for running the service
 RUN addgroup -S netscan && adduser -S netscan -G netscan
@@ -53,7 +53,12 @@ RUN chown -R netscan:netscan /app
 # Set default config path (can be overridden with -config flag)
 ENV CONFIG_PATH=/app/config.yml
 
-# Expose no ports by default (netscan is a client application)
+# Expose health check port
+EXPOSE 8080
+
+# Add health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health/live || exit 1
 
 # Run netscan
 ENTRYPOINT ["/app/netscan"]
