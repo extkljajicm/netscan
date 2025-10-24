@@ -40,15 +40,22 @@ func main() {
 	// Initialize state manager (single source of truth for devices)
 	stateMgr := state.NewManager(cfg.MaxDevices)
 
-	// Initialize InfluxDB writer with health check
-	writer := influx.NewWriter(cfg.InfluxDB.URL, cfg.InfluxDB.Token, cfg.InfluxDB.Org, cfg.InfluxDB.Bucket)
+	// Initialize InfluxDB writer with health check and batching
+	writer := influx.NewWriter(
+		cfg.InfluxDB.URL,
+		cfg.InfluxDB.Token,
+		cfg.InfluxDB.Org,
+		cfg.InfluxDB.Bucket,
+		cfg.InfluxDB.BatchSize,
+		cfg.InfluxDB.FlushInterval,
+	)
 	defer writer.Close()
 
 	log.Println("Checking InfluxDB connectivity...")
 	if err := writer.HealthCheck(); err != nil {
 		log.Fatalf("InfluxDB connection failed: %v", err)
 	}
-	log.Println("InfluxDB connection successful ✓")
+	log.Printf("InfluxDB connection successful ✓ (batch_size: %d, flush_interval: %v)", cfg.InfluxDB.BatchSize, cfg.InfluxDB.FlushInterval)
 
 	// Map IP addresses to their pinger cancellation functions
 	// CRITICAL: Protected by mutex to prevent concurrent map access
