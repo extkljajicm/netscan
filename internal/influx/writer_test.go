@@ -33,3 +33,20 @@ func TestWritePingResult(t *testing.T) {
 		t.Errorf("mockWriter did not record values correctly")
 	}
 }
+
+func TestWriteHealthMetrics(t *testing.T) {
+	// This test verifies that WriteHealthMetrics accepts the correct parameters
+	// and doesn't panic. Since it writes directly to InfluxDB, we can't easily
+	// mock the behavior without a full InfluxDB connection.
+	// The test validates the method signature and basic functionality.
+	
+	// Create a writer (this will fail to connect to InfluxDB but that's OK for this test)
+	// We just want to verify the method exists and accepts the right parameters
+	w := NewWriter("http://localhost:8086", "test-token", "test-org", "test-bucket", "test-health", 10, 1*time.Second)
+	defer w.Close()
+	
+	// Call WriteHealthMetrics with sample data - should not panic
+	w.WriteHealthMetrics(100, 50, 200, 64, true, 1000, 5)
+	
+	// If we get here without panic, the test passes
+}

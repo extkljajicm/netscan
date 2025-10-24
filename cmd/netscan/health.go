@@ -77,6 +77,16 @@ func (hs *HealthServer) Start() error {
 func (hs *HealthServer) healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
+	response := hs.GetHealthMetrics()
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
+// GetHealthMetrics gathers and returns current health metrics
+func (hs *HealthServer) GetHealthMetrics() HealthResponse {
 	// Get memory stats
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -88,7 +98,7 @@ func (hs *HealthServer) healthHandler(w http.ResponseWriter, r *http.Request) {
 		status = "degraded"
 	}
 
-	response := HealthResponse{
+	return HealthResponse{
 		Status:             status,
 		Version:            "1.0.0", // TODO: Get from build-time variable
 		Uptime:             time.Since(hs.startTime).String(),
@@ -100,11 +110,6 @@ func (hs *HealthServer) healthHandler(w http.ResponseWriter, r *http.Request) {
 		Goroutines:         runtime.NumGoroutine(),
 		MemoryMB:           m.Alloc / 1024 / 1024,
 		Timestamp:          time.Now(),
-	}
-
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
 	}
 }
 

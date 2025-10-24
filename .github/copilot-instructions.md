@@ -90,8 +90,10 @@ To keep the project focused, we explicitly **do not** do the following. Do not s
 * `ping_timeout` (duration): Timeout for individual ping operations (e.g., "2s")
 * `snmp_daily_schedule` (string): Time for daily SNMP scan in HH:MM format (e.g., "02:00"), empty string disables
 * `health_check_port` (int): HTTP server port for health endpoints (default: 8080)
+* `health_report_interval` (duration): Interval for writing health metrics to InfluxDB (default: "10s")
 * `batch_size` (int): InfluxDB batch size for performance (default: 100)
 * `flush_interval` (duration): InfluxDB batch flush interval (default: "5s")
+* `health_bucket` (string): InfluxDB bucket for health metrics (default: "health")
 * `icmp_workers` (int): Concurrent ICMP discovery workers (default: 64)
 * `snmp_workers` (int): Concurrent SNMP scanning workers (default: 32)
 * `max_concurrent_pingers` (int): Maximum number of active pinger goroutines (default: 1000)
@@ -174,7 +176,8 @@ To keep the project focused, we explicitly **do not** do the following. Do not s
 
 ### InfluxDB Writer (`internal/influx/writer.go`)
 * **High-Performance Batch System:** Lock-free channel-based batching with background flusher goroutine
-* **Constructor:** `NewWriter(url, token, org, bucket string, batchSize int, flushInterval time.Duration) *Writer`
+* **Dual-Bucket Architecture:** Separate WriteAPI instances for primary metrics and health metrics
+* **Constructor:** `NewWriter(url, token, org, bucket, healthBucket string, batchSize int, flushInterval time.Duration) *Writer`
 * **Health Check:** `HealthCheck() error` - Performs connectivity test, called on startup (fail-fast) and by health endpoint
 * **Metrics Tracking:** Atomic counters for successful and failed batch writes
 
@@ -184,8 +187,8 @@ To keep the project focused, we explicitly **do not** do the following. Do not s
   1. Batch full (reached `batchSize` points)
   2. Timer fires (after `flushInterval` duration)
 * **Non-Blocking Writes:** `WritePingResult()` and `WriteDeviceInfo()` immediately return after queuing point
-* **Graceful Shutdown:** `Close()` method drains remaining points and performs final flush
-* **Error Monitoring:** Separate goroutine monitors WriteAPI error channel and logs failures with context
+* **Graceful Shutdown:** `Close()` method drains remaining points and performs final flush on both WriteAPIs
+* **Error Monitoring:** Separate goroutine monitors both WriteAPI error channels and logs failures with bucket context
 
 **Write Methods:**
 * `WritePingResult(ip string, rtt time.Duration, successful bool) error`: Queues ping metrics to batch
@@ -197,6 +200,11 @@ To keep the project focused, we explicitly **do not** do the following. Do not s
   * Tags: "ip"
   * Fields: "hostname" (string), "snmp_description" (string)
   * All strings sanitized via `sanitizeInfluxString()` to prevent injection
+* `WriteHealthMetrics(deviceCount, pingerCount, goroutines, memMB int, influxOK bool, influxSuccess, influxFailed uint64)`: Writes health metrics directly to health bucket
+  * Measurement: "health_metrics"
+  * Tags: none
+  * Fields: "device_count" (int), "active_pingers" (int), "goroutines" (int), "memory_mb" (int), "influxdb_ok" (bool), "influxdb_successful_batches" (uint64), "influxdb_failed_batches" (uint64)
+  * Uses InfluxDB client's internal batching (not custom batch channel)
 
 **Data Sanitization:**
 * Removes null bytes, control characters (except \n, \r, \t)
@@ -690,21 +698,30 @@ func TestUpdateNewField(t *testing.T) {
   2. Call `stateMgr.PruneStale(24 * time.Hour)`
   3. Reconciliation loop will automatically stop pingers for removed devices
 
+**Ticker 5: Health Report Loop**
+* **Interval:** `cfg.HealthReportInterval` (default: 10s)
+* **Purpose:** Periodically write application health metrics to InfluxDB health bucket
+* **Process:**
+  1. Call `healthServer.GetHealthMetrics()` to gather current metrics
+  2. Call `writer.WriteHealthMetrics()` with device count, pinger count, goroutines, memory, InfluxDB status
+  3. Metrics written directly to health bucket (separate from primary metrics)
+* **Non-Blocking:** Uses InfluxDB client's internal batching, does not interfere with custom batch system
+
 **Graceful Shutdown Sequence:**
 1. Signal received (SIGINT or SIGTERM)
 2. Log shutdown message
 3. Call `stop()` to cancel main context
-4. Stop all four tickers
+4. Stop all five tickers
 5. Acquire `pingersMu` lock
 6. Iterate all active pingers and call their cancel functions
 7. Release `pingersMu` lock
 8. Call `pingerWg.Wait()` to wait for all pinger goroutines to exit
-9. Call `writer.Close()` to flush remaining batched points
+9. Call `writer.Close()` to flush remaining batched points from both WriteAPIs
 10. Log "Shutdown complete"
 11. Return from main
 
 **Concurrency Model:**
-* All four tickers run independently in main select loop
+* All five tickers run independently in main select loop
 * Pinger goroutines run independently per device
 * Mutex protection on activePingers map
 * WaitGroup for pinger lifecycle tracking

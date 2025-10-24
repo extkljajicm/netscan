@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 func TestLoadConfigValid(t *testing.T) {
@@ -57,5 +58,44 @@ func TestLoadConfigInvalid(t *testing.T) {
 	_, err = LoadConfig(f.Name())
 	if err == nil {
 		t.Errorf("expected error for invalid yaml")
+	}
+}
+
+func TestLoadConfigDefaults(t *testing.T) {
+	f, err := os.CreateTemp("", "config_test_defaults_*.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	configYAML := `icmp_discovery_interval: "5m"
+networks:
+  - "192.168.1.0/30"
+snmp:
+  community: "testcommunity"
+  port: 161
+ping_interval: "10s"
+ping_timeout: "1s"
+influxdb:
+  url: "http://localhost:8086"
+  token: "token"
+  org: "org"
+  bucket: "bucket"
+`
+	if _, err := f.WriteString(configYAML); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(f.Name())
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	
+	// Test health_bucket default
+	if cfg.InfluxDB.HealthBucket != "health" {
+		t.Errorf("expected health_bucket default to be 'health', got %s", cfg.InfluxDB.HealthBucket)
+	}
+	
+	// Test health_report_interval default
+	if cfg.HealthReportInterval != 10*time.Second {
+		t.Errorf("expected health_report_interval default to be 10s, got %v", cfg.HealthReportInterval)
 	}
 }

@@ -25,6 +25,7 @@ type InfluxDBConfig struct {
 	Token         string        `yaml:"token"`
 	Org           string        `yaml:"org"`
 	Bucket        string        `yaml:"bucket"`
+	HealthBucket  string        `yaml:"health_bucket"`   // Bucket for health metrics
 	BatchSize     int           `yaml:"batch_size"`      // Number of points to batch before writing
 	FlushInterval time.Duration `yaml:"flush_interval"`  // Maximum time to hold points before flushing
 }
@@ -40,8 +41,9 @@ type Config struct {
 	PingInterval          time.Duration  `yaml:"ping_interval"`
 	PingTimeout           time.Duration  `yaml:"ping_timeout"`
 	InfluxDB              InfluxDBConfig `yaml:"influxdb"`
-	SNMPDailySchedule     string         `yaml:"snmp_daily_schedule"` // Daily SNMP scan time (HH:MM format)
-	HealthCheckPort       int            `yaml:"health_check_port"`   // HTTP health check endpoint port
+	SNMPDailySchedule     string         `yaml:"snmp_daily_schedule"`  // Daily SNMP scan time (HH:MM format)
+	HealthCheckPort       int            `yaml:"health_check_port"`    // HTTP health check endpoint port
+	HealthReportInterval  time.Duration  `yaml:"health_report_interval"` // Interval for writing health metrics
 	// Resource protection settings
 	MaxConcurrentPingers int           `yaml:"max_concurrent_pingers"`
 	MaxDevices           int           `yaml:"max_devices"`
@@ -72,11 +74,13 @@ func LoadConfig(path string) (*Config, error) {
 			Token         string `yaml:"token"`
 			Org           string `yaml:"org"`
 			Bucket        string `yaml:"bucket"`
+			HealthBucket  string `yaml:"health_bucket"`
 			BatchSize     int    `yaml:"batch_size"`
 			FlushInterval string `yaml:"flush_interval"`
 		} `yaml:"influxdb"`
 		SNMPDailySchedule     string `yaml:"snmp_daily_schedule"`
 		HealthCheckPort       int    `yaml:"health_check_port"`
+		HealthReportInterval  string `yaml:"health_report_interval"`
 		// Resource protection settings
 		MaxConcurrentPingers int    `yaml:"max_concurrent_pingers"`
 		MaxDevices           int    `yaml:"max_devices"`
@@ -133,6 +137,15 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 
+	// Parse HealthReportInterval if specified
+	var healthReportInterval time.Duration
+	if raw.HealthReportInterval != "" {
+		healthReportInterval, err = time.ParseDuration(raw.HealthReportInterval)
+		if err != nil {
+			return nil, fmt.Errorf("invalid health_report_interval: %v", err)
+		}
+	}
+
 	// Set default SNMP timeout if not specified
 	if raw.SNMP.Timeout == 0 {
 		raw.SNMP.Timeout = 5 * time.Second
@@ -164,6 +177,14 @@ func LoadConfig(path string) (*Config, error) {
 	if flushInterval == 0 {
 		flushInterval = 5 * time.Second // Default: flush every 5 seconds
 	}
+	// Set health bucket default
+	if raw.InfluxDB.HealthBucket == "" {
+		raw.InfluxDB.HealthBucket = "health" // Default: health bucket
+	}
+	// Set health report interval default
+	if healthReportInterval == 0 {
+		healthReportInterval = 10 * time.Second // Default: report health every 10 seconds
+	}
 	// Set health check port default
 	if raw.HealthCheckPort == 0 {
 		raw.HealthCheckPort = 8080 // Default: port 8080 for health checks
@@ -174,6 +195,7 @@ func LoadConfig(path string) (*Config, error) {
 	raw.InfluxDB.Token = expandEnv(raw.InfluxDB.Token)
 	raw.InfluxDB.Org = expandEnv(raw.InfluxDB.Org)
 	raw.InfluxDB.Bucket = expandEnv(raw.InfluxDB.Bucket)
+	raw.InfluxDB.HealthBucket = expandEnv(raw.InfluxDB.HealthBucket)
 	raw.SNMP.Community = expandEnv(raw.SNMP.Community)
 
 	return &Config{
@@ -190,11 +212,13 @@ func LoadConfig(path string) (*Config, error) {
 			Token:         raw.InfluxDB.Token,
 			Org:           raw.InfluxDB.Org,
 			Bucket:        raw.InfluxDB.Bucket,
+			HealthBucket:  raw.InfluxDB.HealthBucket,
 			BatchSize:     raw.InfluxDB.BatchSize,
 			FlushInterval: flushInterval,
 		},
 		SNMPDailySchedule:     raw.SNMPDailySchedule,
 		HealthCheckPort:       raw.HealthCheckPort,
+		HealthReportInterval:  healthReportInterval,
 		MaxConcurrentPingers:  raw.MaxConcurrentPingers,
 		MaxDevices:            raw.MaxDevices,
 		MinScanInterval:       minScanInterval,

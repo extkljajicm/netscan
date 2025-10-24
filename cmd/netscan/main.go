@@ -50,6 +50,7 @@ func main() {
 		cfg.InfluxDB.Token,
 		cfg.InfluxDB.Org,
 		cfg.InfluxDB.Bucket,
+		cfg.InfluxDB.HealthBucket,
 		cfg.InfluxDB.BatchSize,
 		cfg.InfluxDB.FlushInterval,
 	)
@@ -123,6 +124,10 @@ func main() {
 	pruningTicker := time.NewTicker(1 * time.Hour)
 	defer pruningTicker.Stop()
 
+	// Ticker 5: Health Report Loop - writes health metrics to InfluxDB
+	healthReportTicker := time.NewTicker(cfg.HealthReportInterval)
+	defer healthReportTicker.Stop()
+
 	// Run initial ICMP discovery at startup
 	log.Info().Msg("Starting ICMP discovery scan...")
 	log.Info().Strs("networks", cfg.Networks).Msg("Scanning networks")
@@ -191,6 +196,7 @@ func main() {
 	}
 	log.Info().Msg("Pinger Reconciliation: every 5s")
 	log.Info().Msg("State Pruning: every 1h")
+	log.Info().Dur("health_interval", cfg.HealthReportInterval).Msg("Health Report interval")
 
 	// Main event loop with all tickers
 	for {
@@ -356,6 +362,21 @@ func main() {
 						Msg("Pruned device")
 				}
 			}
+
+		case <-healthReportTicker.C:
+			// Health Report: Write health metrics to InfluxDB
+			log.Debug().Msg("Writing health metrics...")
+			metrics := healthServer.GetHealthMetrics()
+			
+			writer.WriteHealthMetrics(
+				metrics.DeviceCount,
+				metrics.ActivePingers,
+				metrics.Goroutines,
+				int(metrics.MemoryMB),
+				metrics.InfluxDBOK,
+				metrics.InfluxDBSuccessful,
+				metrics.InfluxDBFailed,
+			)
 		}
 	}
 }

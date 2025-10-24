@@ -566,6 +566,10 @@ influxdb:
   # Default: "netscan"
   bucket: "netscan"
   
+  # Bucket for health metrics storage
+  # Default: "health"
+  health_bucket: "health"
+  
   # Batch write settings for performance
   # Number of points to accumulate before writing
   # Default: 100
@@ -585,12 +589,15 @@ influxdb:
 * Defaults (100 points, 5s) work well for 100-1000 devices
 
 **InfluxDB Schema:**
-* Measurement: `ping`
+* Measurement: `ping` (primary bucket)
   * Tags: `ip`, `hostname`
   * Fields: `rtt_ms` (float64), `success` (bool)
-* Measurement: `device_info`
+* Measurement: `device_info` (primary bucket)
   * Tags: `ip`
   * Fields: `hostname` (string), `snmp_description` (string)
+* Measurement: `health_metrics` (health bucket)
+  * Tags: none
+  * Fields: `device_count` (int), `active_pingers` (int), `goroutines` (int), `memory_mb` (int), `influxdb_ok` (bool), `influxdb_successful_batches` (uint64), `influxdb_failed_batches` (uint64)
 
 ### Health Check Endpoint
 
@@ -599,12 +606,21 @@ influxdb:
 # Default: 8080
 # Used by Docker HEALTHCHECK and Kubernetes probes
 health_check_port: 8080
+
+# Interval for writing health metrics to InfluxDB health bucket
+# Default: "10s"
+# Health metrics include device count, memory usage, goroutines, InfluxDB stats
+health_report_interval: "10s"
 ```
 
 **Endpoints:**
 * `GET /health` - Detailed JSON status (device count, memory, goroutines, InfluxDB stats)
 * `GET /health/ready` - Readiness probe (200 if InfluxDB OK, 503 if unavailable)
 * `GET /health/live` - Liveness probe (200 if application running)
+
+**Health Metrics Persistence:**
+* Health metrics are automatically written to the health bucket at the configured interval
+* Enables long-term tracking of application performance and resource usage
 
 **Docker Integration:**
 * HEALTHCHECK directive in Dockerfile uses `/health/live`

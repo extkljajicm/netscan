@@ -16,10 +16,11 @@ import (
 
 // Writer handles InfluxDB v2 time-series data writes with batching
 type Writer struct {
-	client   influxdb2.Client // InfluxDB client instance
-	writeAPI api.WriteAPI     // Non-blocking write API for batching
-	org      string           // InfluxDB organization name
-	bucket   string           // InfluxDB bucket name
+	client         influxdb2.Client // InfluxDB client instance
+	writeAPI       api.WriteAPI     // Non-blocking write API for batching
+	healthWriteAPI api.WriteAPI     // Non-blocking write API for health metrics
+	org            string           // InfluxDB organization name
+	bucket         string           // InfluxDB bucket name
 
 	// Batching fields - using channel for lock-free operation
 	batchChan   chan *write.Point
@@ -34,22 +35,24 @@ type Writer struct {
 }
 
 // NewWriter creates a new InfluxDB writer with batching support
-func NewWriter(url, token, org, bucket string, batchSize int, flushInterval time.Duration) *Writer {
+func NewWriter(url, token, org, bucket, healthBucket string, batchSize int, flushInterval time.Duration) *Writer {
 	client := influxdb2.NewClient(url, token)
 	writeAPI := client.WriteAPI(org, bucket)
+	healthWriteAPI := client.WriteAPI(org, healthBucket)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	w := &Writer{
-		client:      client,
-		writeAPI:    writeAPI,
-		org:         org,
-		bucket:      bucket,
-		batchChan:   make(chan *write.Point, batchSize*2), // Buffered channel for lock-free writes
-		batchSize:   batchSize,
-		flushTicker: time.NewTicker(flushInterval),
-		ctx:         ctx,
-		cancel:      cancel,
+		client:         client,
+		writeAPI:       writeAPI,
+		healthWriteAPI: healthWriteAPI,
+		org:            org,
+		bucket:         bucket,
+		batchChan:      make(chan *write.Point, batchSize*2), // Buffered channel for lock-free writes
+		batchSize:      batchSize,
+		flushTicker:    time.NewTicker(flushInterval),
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 
 	// Start background flusher
@@ -133,15 +136,24 @@ func (w *Writer) monitorWriteErrors() {
 		}
 	}()
 
-	errorChan := w.writeAPI.Errors()
+	primaryErrorChan := w.writeAPI.Errors()
+	healthErrorChan := w.healthWriteAPI.Errors()
 	for {
 		select {
 		case <-w.ctx.Done():
 			return
-		case err := <-errorChan:
+		case err := <-primaryErrorChan:
 			if err != nil {
 				log.Error().
 					Err(err).
+					Str("bucket", "primary").
+					Msg("InfluxDB write error detected")
+			}
+		case err := <-healthErrorChan:
+			if err != nil {
+				log.Error().
+					Err(err).
+					Str("bucket", "health").
 					Msg("InfluxDB write error detected")
 			}
 		}
@@ -189,6 +201,27 @@ func (w *Writer) WriteDeviceInfo(ip, hostname, sysDescr string) error {
 
 	w.addToBatch(p)
 	return nil
+}
+
+// WriteHealthMetrics writes application health metrics to InfluxDB health bucket
+func (w *Writer) WriteHealthMetrics(deviceCount, pingerCount, goroutines, memMB int, influxOK bool, influxSuccess, influxFailed uint64) {
+	p := influxdb2.NewPoint(
+		"health_metrics",
+		map[string]string{},
+		map[string]interface{}{
+			"device_count":                deviceCount,
+			"active_pingers":              pingerCount,
+			"goroutines":                  goroutines,
+			"memory_mb":                   memMB,
+			"influxdb_ok":                 influxOK,
+			"influxdb_successful_batches": influxSuccess,
+			"influxdb_failed_batches":     influxFailed,
+		},
+		time.Now(),
+	)
+
+	// Write directly using healthWriteAPI (relies on InfluxDB client's internal batching)
+	w.healthWriteAPI.WritePoint(p)
 }
 
 // WritePingResult writes ICMP ping metrics to InfluxDB (optimized for time-series)
@@ -307,7 +340,8 @@ func (w *Writer) Close() {
 	w.cancel()           // Stop background flusher (which will drain remaining points)
 	w.flushTicker.Stop() // Stop flush ticker
 	time.Sleep(100 * time.Millisecond) // Give background flusher time to finish
-	w.writeAPI.Flush()   // Flush write API buffer
+	w.writeAPI.Flush()   // Flush primary write API buffer
+	w.healthWriteAPI.Flush() // Flush health write API buffer
 	w.client.Close()
 }
 
