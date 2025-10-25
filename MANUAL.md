@@ -632,42 +632,46 @@ snmp:
 ping_interval: "2s"
 
 # Timeout for individual ping operations
-# Default: "2s"
-ping_timeout: "2s"
+# Default: "3s"
+# IMPORTANT: Should be > ping_interval to allow error margin
+ping_timeout: "3s"
 ```
 
 **Notes:**
 * Lower intervals (e.g., "1s") provide more data points but increase CPU/network load
-* ping_timeout should be ≤ ping_interval to avoid overlap
+* ping_timeout should be > ping_interval to allow proper error margin (recommended: ping_interval + 1s minimum)
 
 ### Performance Tuning
 
 ```yaml
 # Number of concurrent ICMP ping workers for discovery scans
-# Default: 1024 (high-performance servers)
-# Recommended: 2-4x CPU cores for small deployments, higher for large networks
+# Default: 64 (safe for most deployments)
+# Recommended: Start with 64 and increase if needed for large networks
 # Range: 1-2000
-icmp_workers: 1024
+# WARNING: Values >256 may cause kernel raw socket buffer overflow
+icmp_workers: 64
 
 # Number of concurrent SNMP polling workers
-# Default: 256 (high-performance servers)
-# Recommended: 1-2x CPU cores (SNMP is CPU-intensive due to protocol parsing)
+# Default: 32 (safe for most deployments)
+# Recommended: 25-50% of icmp_workers to avoid overwhelming SNMP agents
 # Range: 1-1000
-snmp_workers: 256
+snmp_workers: 32
 ```
 
 **Worker Count Guidelines:**
 
-| System Type       | CPU Cores | ICMP Workers | SNMP Workers | Max Devices | Max Pingers |
-|-------------------|-----------|--------------|--------------|-------------|-------------|
-| Raspberry Pi      | 4         | 8            | 4            | 100         | 100         |
-| Home Server       | 4-8       | 16           | 8            | 500         | 500         |
-| Workstation       | 8-16      | 32           | 16           | 1000        | 1000        |
-| Small Server      | 8-16      | 128          | 64           | 5000        | 5000        |
-| Large Server      | 16+       | 1024         | 256          | 20000       | 20000       |
+| System Type       | Network Size | ICMP Workers | SNMP Workers | Max Devices | Max Pingers |
+|-------------------|--------------|--------------|--------------|-------------|-------------|
+| Raspberry Pi      | <100 devs    | 32           | 16           | 100         | 100         |
+| Home Server       | <500 devs    | 64           | 32           | 500         | 500         |
+| Workstation       | <2000 devs   | 128          | 64           | 2000        | 2000        |
+| Small Server      | <5000 devs   | 256          | 128          | 5000        | 5000        |
+| Large Server      | 5000+ devs   | 512          | 256          | 20000       | 20000       |
 
 **Notes:**
-* Start conservative and increase based on CPU usage
+* Start conservative with default 64/32 workers and increase based on network size and performance
+* Values >256 for ICMP workers may cause kernel raw socket buffer saturation
+* Monitor CPU usage and adjust accordingly - more workers ≠ always better
 * Monitor with `htop` or `top`
 * Network latency affects optimal worker count
 
@@ -812,11 +816,11 @@ snmp:
 
 # Monitoring
 ping_interval: "2s"
-ping_timeout: "2s"
+ping_timeout: "3s"
 
 # Performance
-icmp_workers: 1024
-snmp_workers: 256
+icmp_workers: 64
+snmp_workers: 32
 
 # InfluxDB
 influxdb:
