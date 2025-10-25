@@ -204,6 +204,41 @@ docker compose logs influxdb | grep -i "health bucket"
 docker exec influxdbv2 influx bucket list --org test-org --token netscan-token
 ```
 
+**Pings show success=false despite valid RTT values:**
+
+**Symptom:** InfluxDB queries show `success=false` for ping records that have non-zero `rtt_ms` values (e.g., 12.34ms, 50.1ms). This indicates successful pings are being incorrectly classified as failures.
+
+**Cause:** This was a bug in versions prior to the fix (commit fcbd411). The ping success detection logic relied solely on `stats.PacketsRecv > 0` from the pro-bing library, which had edge cases where the packet counter wasn't updated correctly even though valid RTT data existed.
+
+**Fix:** The code was corrected to use RTT data directly for success detection:
+```go
+// New logic: RTT data proves we got a response
+successful := len(stats.Rtts) > 0 && stats.AvgRtt > 0
+```
+
+**Solution:** Update to the latest version of netscan. The fix ensures that:
+* Non-zero RTT values always result in `success=true`
+* Zero RTT values always result in `success=false`
+* Data consistency is maintained in InfluxDB
+
+**Verification:** After updating, query InfluxDB to confirm all ping records are consistent:
+```bash
+# In InfluxDB UI or CLI, verify no records have non-zero rtt_ms with success=false
+from(bucket: "netscan")
+  |> range(start: -1h)
+  |> filter(fn: (r) => r._measurement == "ping")
+  |> filter(fn: (r) => r._field == "rtt_ms" or r._field == "success")
+```
+
+**Enhanced Logging:** The fix also added detailed packet statistics to debug logs. To view ping diagnostics:
+```bash
+# View debug logs with packet statistics
+docker compose logs netscan | grep -E "(Ping successful|Ping failed)"
+
+# Example output includes: ip, rtt, packets_recv, packets_sent
+# {"level":"debug","ip":"192.168.1.1","rtt":12340000,"packets_recv":1,"packets_sent":1,"message":"Ping successful"}
+```
+
 ### Log Management
 
 **Docker Log Rotation:**
