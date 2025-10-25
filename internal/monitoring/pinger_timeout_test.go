@@ -2,10 +2,12 @@ package monitoring
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kljama/netscan/internal/state"
+	"golang.org/x/time/rate"
 )
 
 // TestTimeoutParameterPropagation verifies that the timeout parameter is properly
@@ -49,10 +51,12 @@ func TestTimeoutParameterPropagation(t *testing.T) {
 			stateMgr := &mockStateManager{}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 			defer cancel()
+			limiter := rate.NewLimiter(rate.Limit(100.0), 256)
+			var counter atomic.Int64
 			
 			// This should compile and accept timeout parameter without error
 			// The goroutine will exit almost immediately due to context timeout
-			StartPinger(ctx, nil, dev, tt.interval, tt.timeout, writer, stateMgr)
+			StartPinger(ctx, nil, dev, tt.interval, tt.timeout, writer, stateMgr, limiter, &counter)
 			
 			// Wait for context to expire
 			<-ctx.Done()
@@ -84,9 +88,11 @@ func TestTimeoutNotHardcoded(t *testing.T) {
 		writer := &mockWriter{}
 		stateMgr := &mockStateManager{}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		limiter := rate.NewLimiter(rate.Limit(100.0), 256)
+		var counter atomic.Int64
 		
 		// Should accept any reasonable timeout value
-		StartPinger(ctx, nil, dev, 100*time.Millisecond, timeout, writer, stateMgr)
+		StartPinger(ctx, nil, dev, 100*time.Millisecond, timeout, writer, stateMgr, limiter, &counter)
 		
 		<-ctx.Done()
 		cancel()
