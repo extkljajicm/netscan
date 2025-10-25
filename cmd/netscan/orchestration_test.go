@@ -482,6 +482,157 @@ func TestPingerMapConcurrency(t *testing.T) {
 	t.Log("  4. Single lock/unlock per reconciliation cycle for efficiency")
 }
 
+// TestPingerRaceConditionPrevention tests that a device cannot have two pingers running simultaneously
+// This test validates the fix for the race condition where:
+// 1. Device is pruned from StateManager (appears removed)
+// 2. Reconciliation stops the pinger by calling cancelFunc()
+// 3. Device is immediately re-discovered and added back
+// 4. Reconciliation tries to start a new pinger before old one exits
+// Result: Without the fix, two pingers would be running for the same IP
+func TestPingerRaceConditionPrevention(t *testing.T) {
+	// Simulate the scenario:
+	// - activePingers has "192.168.1.1" with a pinger running
+	// - stoppingPingers tracks "192.168.1.1" (pinger is shutting down)
+	// - currentIPs has "192.168.1.1" (device re-discovered)
+	// Expected: Should NOT start a new pinger because the IP is in stoppingPingers
+	
+	currentIPs := []string{"192.168.1.1", "192.168.1.2"}
+	activePingers := make(map[string]bool)
+	stoppingPingers := make(map[string]bool)
+	
+	// Scenario 1: IP is in stoppingPingers (old pinger shutting down)
+	stoppingPingers["192.168.1.1"] = true
+	
+	// Build current IP map
+	currentIPMap := make(map[string]bool)
+	for _, ip := range currentIPs {
+		currentIPMap[ip] = true
+	}
+	
+	// Try to start pingers for devices in currentIPMap
+	shouldStart := []string{}
+	for ip := range currentIPMap {
+		// Check both activePingers AND stoppingPingers
+		if !activePingers[ip] && !stoppingPingers[ip] {
+			shouldStart = append(shouldStart, ip)
+		}
+	}
+	
+	// Verify: Should start pinger for 192.168.1.2 but NOT 192.168.1.1
+	if len(shouldStart) != 1 {
+		t.Errorf("Expected to start 1 pinger, got %d", len(shouldStart))
+	}
+	
+	found192_168_1_1 := false
+	found192_168_1_2 := false
+	for _, ip := range shouldStart {
+		if ip == "192.168.1.1" {
+			found192_168_1_1 = true
+		}
+		if ip == "192.168.1.2" {
+			found192_168_1_2 = true
+		}
+	}
+	
+	if found192_168_1_1 {
+		t.Error("Should NOT start pinger for 192.168.1.1 because it's in stoppingPingers")
+	}
+	
+	if !found192_168_1_2 {
+		t.Error("Should start pinger for 192.168.1.2")
+	}
+	
+	// Scenario 2: IP is in activePingers (pinger already running)
+	activePingers["192.168.1.3"] = true
+	stoppingPingers = make(map[string]bool) // Clear stopping list
+	currentIPs = []string{"192.168.1.3"}
+	currentIPMap = make(map[string]bool)
+	for _, ip := range currentIPs {
+		currentIPMap[ip] = true
+	}
+	
+	shouldStart = []string{}
+	for ip := range currentIPMap {
+		if !activePingers[ip] && !stoppingPingers[ip] {
+			shouldStart = append(shouldStart, ip)
+		}
+	}
+	
+	if len(shouldStart) != 0 {
+		t.Errorf("Expected to start 0 pingers for already-active device, got %d", len(shouldStart))
+	}
+	
+	// Scenario 3: IP is in neither map (can start)
+	activePingers = make(map[string]bool)
+	stoppingPingers = make(map[string]bool)
+	currentIPs = []string{"192.168.1.4"}
+	currentIPMap = make(map[string]bool)
+	for _, ip := range currentIPs {
+		currentIPMap[ip] = true
+	}
+	
+	shouldStart = []string{}
+	for ip := range currentIPMap {
+		if !activePingers[ip] && !stoppingPingers[ip] {
+			shouldStart = append(shouldStart, ip)
+		}
+	}
+	
+	if len(shouldStart) != 1 {
+		t.Errorf("Expected to start 1 pinger for new device, got %d", len(shouldStart))
+	}
+}
+
+// TestPingerStoppingTransition tests the state transition when stopping a pinger
+func TestPingerStoppingTransition(t *testing.T) {
+	// This test validates the correct sequence for stopping a pinger:
+	// 1. Move IP from activePingers to stoppingPingers
+	// 2. Call cancelFunc()
+	// 3. Later (when goroutine exits), remove from stoppingPingers
+	
+	activePingers := map[string]bool{
+		"192.168.1.1": true,
+		"192.168.1.2": true,
+	}
+	stoppingPingers := make(map[string]bool)
+	
+	// Device 192.168.1.1 should be stopped
+	ipToStop := "192.168.1.1"
+	
+	// Step 1: Move to stoppingPingers
+	if activePingers[ipToStop] {
+		stoppingPingers[ipToStop] = true
+		delete(activePingers, ipToStop)
+	}
+	
+	// Verify state after move
+	if activePingers[ipToStop] {
+		t.Error("IP should be removed from activePingers")
+	}
+	if !stoppingPingers[ipToStop] {
+		t.Error("IP should be added to stoppingPingers")
+	}
+	
+	// Step 2: In real code, cancelFunc() would be called here
+	// (We can't test that in isolation without the full context)
+	
+	// Step 3: Simulate goroutine exit - remove from stoppingPingers
+	delete(stoppingPingers, ipToStop)
+	
+	// Verify final state
+	if activePingers[ipToStop] {
+		t.Error("IP should not be in activePingers")
+	}
+	if stoppingPingers[ipToStop] {
+		t.Error("IP should be removed from stoppingPingers after exit")
+	}
+	
+	// Verify other device unaffected
+	if !activePingers["192.168.1.2"] {
+		t.Error("Other devices should remain in activePingers")
+	}
+}
+
 // BenchmarkPingerReconciliation benchmarks the reconciliation logic
 func BenchmarkPingerReconciliation(b *testing.B) {
 	// Setup: 1000 devices, 900 already have pingers

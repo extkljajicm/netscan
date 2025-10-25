@@ -70,6 +70,15 @@ func main() {
 	activePingers := make(map[string]context.CancelFunc)
 	var pingersMu sync.Mutex
 
+	// Map of IPs currently in the process of stopping
+	// CRITICAL: Prevents starting a new pinger before old one fully exits
+	// This fixes the race condition where a device is pruned and quickly re-discovered
+	stoppingPingers := make(map[string]bool)
+
+	// Channel for pingers to notify when they've fully exited
+	// Buffer size allows multiple pingers to exit concurrently without blocking
+	pingerExitChan := make(chan string, 100)
+
 	// Start health check endpoint with accurate pinger count
 	getPingerCount := func() int {
 		pingersMu.Lock()
@@ -187,6 +196,31 @@ func main() {
 		<-sigChan
 		log.Info().Msg("Shutdown signal received, stopping all operations...")
 		stop()
+	}()
+
+	// Pinger exit notification handler
+	// Removes IPs from stoppingPingers when their goroutines fully exit
+	go func() {
+		// Panic recovery for exit notification handler
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("Pinger exit notification handler panic recovered")
+			}
+		}()
+
+		for {
+			select {
+			case <-mainCtx.Done():
+				return
+			case ip := <-pingerExitChan:
+				pingersMu.Lock()
+				delete(stoppingPingers, ip)
+				log.Debug().Str("ip", ip).Msg("Pinger fully exited, removed from stopping list")
+				pingersMu.Unlock()
+			}
+		}
 	}()
 
 	log.Info().Msg("Starting monitoring loops...")
@@ -314,8 +348,13 @@ func main() {
 			}
 			
 			// Start pingers for new devices
+			// CRITICAL: Check both activePingers AND stoppingPingers to prevent race condition
 			for ip := range currentIPMap {
-				if _, exists := activePingers[ip]; !exists {
+				_, isActive := activePingers[ip]
+				_, isStopping := stoppingPingers[ip]
+				
+				// Only start pinger if IP is not active AND not currently stopping
+				if !isActive && !isStopping {
 					if len(activePingers) >= cfg.MaxConcurrentPingers {
 						log.Warn().
 							Int("max_pingers", cfg.MaxConcurrentPingers).
@@ -334,16 +373,48 @@ func main() {
 					}
 					
 					pingerWg.Add(1)
-					go monitoring.StartPinger(pingerCtx, &pingerWg, *dev, cfg.PingInterval, cfg.PingTimeout, writer, stateMgr)
+					// Create a wrapper goroutine to handle exit notification
+					go func(d state.Device, ctx context.Context) {
+						// Panic recovery for pinger wrapper
+						defer func() {
+							if r := recover(); r != nil {
+								log.Error().
+									Str("ip", d.IP).
+									Interface("panic", r).
+									Msg("Pinger wrapper panic recovered")
+							}
+						}()
+						
+						// Run the actual pinger
+						monitoring.StartPinger(ctx, &pingerWg, d, cfg.PingInterval, cfg.PingTimeout, writer, stateMgr)
+						
+						// Notify that this pinger has exited
+						select {
+						case pingerExitChan <- d.IP:
+							// Successfully notified
+						case <-mainCtx.Done():
+							// Main context cancelled, don't block on notification
+						}
+					}(*dev, pingerCtx)
+				} else if isStopping {
+					log.Debug().
+						Str("ip", ip).
+						Msg("Pinger is stopping, will start new one after exit completes")
 				}
 			}
 			
 			// Stop pingers for removed devices
+			// CRITICAL: Move to stoppingPingers first, then call cancelFunc
 			for ip, cancelFunc := range activePingers {
 				if !currentIPMap[ip] {
 					log.Debug().Str("ip", ip).Msg("Stopping continuous pinger for stale device")
-					cancelFunc()
+					
+					// Move to stoppingPingers BEFORE calling cancelFunc
+					stoppingPingers[ip] = true
 					delete(activePingers, ip)
+					
+					// Now call cancelFunc (asynchronous - doesn't wait for goroutine exit)
+					cancelFunc()
 				}
 			}
 			
