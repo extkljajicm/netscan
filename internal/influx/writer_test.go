@@ -46,7 +46,7 @@ func TestWriteHealthMetrics(t *testing.T) {
 	defer w.Close()
 	
 	// Call WriteHealthMetrics with sample data - should not panic
-	w.WriteHealthMetrics(100, 50, 200, 64, true, 1000, 5)
+	w.WriteHealthMetrics(100, 50, 200, 64, 128, true, 1000, 5)
 	
 	// If we get here without panic, the test passes
 }

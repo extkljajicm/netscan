@@ -373,6 +373,7 @@ func main() {
 				metrics.ActivePingers,
 				metrics.Goroutines,
 				int(metrics.MemoryMB),
+				int(metrics.RSSMB), // new RSS value (MB)
 				metrics.InfluxDBOK,
 				metrics.InfluxDBSuccessful,
 				metrics.InfluxDBFailed,

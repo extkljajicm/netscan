@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kljama/netscan/internal/influx"
@@ -32,7 +36,8 @@ type HealthResponse struct {
 	InfluxDBSuccessful uint64    `json:"influxdb_successful"`  // Successful batch writes
 	InfluxDBFailed     uint64    `json:"influxdb_failed"`      // Failed batch writes
 	Goroutines         int       `json:"goroutines"`           // Current goroutine count
-	MemoryMB           uint64    `json:"memory_mb"`            // Current memory usage in MB
+	MemoryMB           uint64    `json:"memory_mb"`            // Current memory usage in MB (Go heap Alloc)
+	RSSMB              uint64    `json:"rss_mb"`               // OS-level resident set size in MB
 	Timestamp          time.Time `json:"timestamp"`            // Current timestamp
 }
 
@@ -87,9 +92,12 @@ func (hs *HealthServer) healthHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetHealthMetrics gathers and returns current health metrics
 func (hs *HealthServer) GetHealthMetrics() HealthResponse {
-	// Get memory stats
+	// Get memory stats (Go runtime heap)
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
+
+	// Get OS-level RSS (Linux /proc)
+	rssMB := getRSSMB()
 
 	// Determine overall status
 	influxOK := hs.writer.HealthCheck() == nil
@@ -109,6 +117,7 @@ func (hs *HealthServer) GetHealthMetrics() HealthResponse {
 		InfluxDBFailed:     hs.writer.GetFailedBatches(),
 		Goroutines:         runtime.NumGoroutine(),
 		MemoryMB:           m.Alloc / 1024 / 1024,
+		RSSMB:              rssMB,
 		Timestamp:          time.Now(),
 	}
 }
@@ -131,4 +140,29 @@ func (hs *HealthServer) livenessHandler(w http.ResponseWriter, r *http.Request) 
 	// If we can respond, we're alive
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ALIVE"))
+}
+
+// getRSSMB attempts to read /proc/self/status and parse VmRSS (kB) to MB.
+// This is Linux-specific. On failure it returns 0.
+func getRSSMB() uint64 {
+	f, err := os.Open("/proc/self/status")
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+
+	s := bufio.NewScanner(f)
+	for s.Scan() {
+		line := s.Text()
+		if strings.HasPrefix(line, "VmRSS:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				kb, err := strconv.ParseUint(fields[1], 10, 64)
+				if err == nil {
+					return kb / 1024
+				}
+			}
+		}
+	}
+	return 0
 }
