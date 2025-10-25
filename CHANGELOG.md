@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Performance optimization for high-resource hardware**: Updated default configuration values to support large-scale deployments
+  - `icmp_workers`: 64 → 1024 (16x increase for faster discovery scans on high-performance servers)
+  - `snmp_workers`: 32 → 256 (8x increase for better concurrent SNMP polling)
+  - `max_devices`: 10000 → 20000 (2x increase to support larger networks)
+  - `max_concurrent_pingers`: 1000 → 20000 (20x increase to match device capacity)
+  - `memory_limit_mb`: 512 → 16384 (32x increase for 16GB RAM servers)
+  - `influxdb.batch_size`: 100 → 5000 (50x increase for better write throughput)
+  - Updated validation limits: `icmp_workers` max 2000, `snmp_workers` max 1000, `max_devices` max 100000, `max_concurrent_pingers` max 100000, `memory_limit_mb` max 16384
+  - **Rationale**: Balanced configuration optimizes for high-performance servers (8+ cores, 16GB+ RAM) while controlling ICMP packet rates
+  - **Backward compatibility**: Existing config files work unchanged; values remain fully configurable for smaller deployments
+  - Documentation updated in README.md and MANUAL.md with deployment size guidelines
+
 ### Added
 
 - Health metrics persistence: New decoupled service to periodically write application health metrics to separate InfluxDB bucket
