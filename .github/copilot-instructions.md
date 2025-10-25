@@ -202,10 +202,11 @@ To keep the project focused, we explicitly **do not** do the following. Do not s
   * Tags: "ip"
   * Fields: "hostname" (string), "snmp_description" (string)
   * All strings sanitized via `sanitizeInfluxString()` to prevent injection
-* `WriteHealthMetrics(deviceCount, pingerCount, goroutines, memMB int, influxOK bool, influxSuccess, influxFailed uint64)`: Writes health metrics directly to health bucket
+* `WriteHealthMetrics(deviceCount, pingerCount, goroutines, memMB, rssMB int, influxOK bool, influxSuccess, influxFailed uint64)`: Writes health metrics directly to health bucket
   * Measurement: "health_metrics"
   * Tags: none
-  * Fields: "device_count" (int), "active_pingers" (int), "goroutines" (int), "memory_mb" (int), "influxdb_ok" (bool), "influxdb_successful_batches" (uint64), "influxdb_failed_batches" (uint64)
+  * Fields: "device_count" (int), "active_pingers" (int), "goroutines" (int), "memory_mb" (int), "rss_mb" (int), "influxdb_ok" (bool), "influxdb_successful_batches" (uint64), "influxdb_failed_batches" (uint64)
+  * Note: memory_mb is Go heap allocation (runtime.MemStats.Alloc), rss_mb is OS-level resident set size (Linux /proc/self/status VmRSS)
   * Uses InfluxDB client's internal batching (not custom batch channel)
 
 **Data Sanitization:**
@@ -239,9 +240,14 @@ To keep the project focused, we explicitly **do not** do the following. Do not s
   "influxdb_failed": 0,
   "goroutines": 156,
   "memory_mb": 34,
+  "rss_mb": 128,
   "timestamp": "2025-10-24T13:00:00Z"
 }
 ```
+
+**Note on Memory Metrics:**
+- `memory_mb`: Go heap allocation (runtime.MemStats.Alloc) - only Go-managed memory
+- `rss_mb`: OS-level resident set size (Linux /proc/self/status VmRSS) - total memory pages in RAM including Go heap, stack, C libraries, and OS overhead
 
 **Docker Integration:**
 * HEALTHCHECK directive in Dockerfile: `wget --spider http://localhost:8080/health/live`
