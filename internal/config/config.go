@@ -153,10 +153,10 @@ func LoadConfig(path string) (*Config, error) {
 
 	// Set default values if not specified
 	if raw.IcmpWorkers == 0 {
-		raw.IcmpWorkers = 1024
+		raw.IcmpWorkers = 64 // Default: 64 workers (reduced from 1024 to prevent resource contention)
 	}
 	if raw.SnmpWorkers == 0 {
-		raw.SnmpWorkers = 256
+		raw.SnmpWorkers = 32 // Default: 32 workers (reduced from 256 to match ICMP workers scale)
 	}
 	if raw.MaxConcurrentPingers == 0 {
 		raw.MaxConcurrentPingers = 20000 // Default: allow up to 20,000 concurrent pingers
@@ -258,6 +258,12 @@ func ValidateConfig(cfg *Config) (string, error) {
 	}
 	if cfg.PingInterval < time.Second {
 		return "", fmt.Errorf("ping_interval must be at least 1 second, got %v", cfg.PingInterval)
+	}
+	
+	// Validate ping timeout vs interval relationship
+	// Timeout should be greater than interval to allow proper error margin
+	if cfg.PingTimeout <= cfg.PingInterval {
+		return "WARNING: ping_timeout should be greater than ping_interval to allow proper error margin. Recommended: ping_timeout >= ping_interval + 1s", nil
 	}
 
 	// Validate SNMP daily schedule format (HH:MM)

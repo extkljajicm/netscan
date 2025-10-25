@@ -53,7 +53,7 @@ func TestStartPingerCancel(t *testing.T) {
 	writer := &mockWriter{}
 	stateMgr := &mockStateManager{}
 	ctx, cancel := context.WithCancel(context.Background())
-	go StartPinger(ctx, nil, dev, 10*time.Millisecond, writer, stateMgr)
+	go StartPinger(ctx, nil, dev, 10*time.Millisecond, 2*time.Second, writer, stateMgr)
 	time.Sleep(30 * time.Millisecond)
 	cancel()
 	if !writer.called {
