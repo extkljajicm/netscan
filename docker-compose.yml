@@ -34,7 +34,12 @@ services:
       - INFLUXDB_TOKEN=${INFLUXDB_TOKEN:-netscan-token}
       - INFLUXDB_ORG=${INFLUXDB_ORG:-test-org}
       - SNMP_COMMUNITY=${SNMP_COMMUNITY:-public}
-    
+      
+    # Debug mode true|false  
+      - DEBUG=true
+    # Human friendly console output when set to development  
+      - ENVIRONMENT=development
+      
     # Health check configuration
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health/live"]
