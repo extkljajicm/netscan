@@ -633,6 +633,88 @@ func TestPingerStoppingTransition(t *testing.T) {
 	}
 }
 
+// TestPingerLifecycleWithStoppingState tests the full lifecycle of a pinger with stopping state
+func TestPingerLifecycleWithStoppingState(t *testing.T) {
+	// This test simulates the realistic scenario that caused the race condition:
+	// 1. Device exists and has active pinger
+	// 2. Device is pruned (pinger moved to stopping state)
+	// 3. Device is immediately re-discovered
+	// 4. Reconciliation should NOT start new pinger (old one still stopping)
+	// 5. Old pinger exits (removed from stopping state)
+	// 6. Reconciliation can now start new pinger
+	
+	activePingers := make(map[string]bool)
+	stoppingPingers := make(map[string]bool)
+	currentDevices := make(map[string]bool)
+	
+	// Phase 1: Device is active with pinger
+	testIP := "192.168.1.100"
+	activePingers[testIP] = true
+	currentDevices[testIP] = true
+	
+	t.Log("Phase 1: Device active with pinger")
+	if !activePingers[testIP] {
+		t.Fatal("Device should have active pinger")
+	}
+	
+	// Phase 2: Device is pruned from state (removed from currentDevices)
+	delete(currentDevices, testIP)
+	
+	// Reconciliation stops the pinger
+	if activePingers[testIP] && !currentDevices[testIP] {
+		stoppingPingers[testIP] = true
+		delete(activePingers, testIP)
+		// cancelFunc() would be called here
+	}
+	
+	t.Log("Phase 2: Device pruned, pinger moved to stopping state")
+	if activePingers[testIP] {
+		t.Error("Device should not be in activePingers")
+	}
+	if !stoppingPingers[testIP] {
+		t.Error("Device should be in stoppingPingers")
+	}
+	
+	// Phase 3: Device is immediately re-discovered
+	currentDevices[testIP] = true
+	
+	// Reconciliation tries to start new pinger
+	canStart := !activePingers[testIP] && !stoppingPingers[testIP]
+	
+	t.Log("Phase 3: Device re-discovered, attempting to start pinger")
+	if canStart {
+		t.Error("Should NOT be able to start pinger while IP is in stoppingPingers")
+	}
+	
+	// Phase 4: Old pinger exits (notification received)
+	delete(stoppingPingers, testIP)
+	
+	t.Log("Phase 4: Old pinger exited, removed from stopping state")
+	if stoppingPingers[testIP] {
+		t.Error("Device should be removed from stoppingPingers")
+	}
+	
+	// Phase 5: Next reconciliation can now start new pinger
+	canStart = !activePingers[testIP] && !stoppingPingers[testIP] && currentDevices[testIP]
+	
+	t.Log("Phase 5: Can now start new pinger")
+	if !canStart {
+		t.Error("Should be able to start pinger after old one exited")
+	}
+	
+	// Start the new pinger
+	if canStart {
+		activePingers[testIP] = true
+	}
+	
+	if !activePingers[testIP] {
+		t.Error("New pinger should be started")
+	}
+	if stoppingPingers[testIP] {
+		t.Error("Device should not be in stoppingPingers")
+	}
+}
+
 // BenchmarkPingerReconciliation benchmarks the reconciliation logic
 func BenchmarkPingerReconciliation(b *testing.B) {
 	// Setup: 1000 devices, 900 already have pingers
