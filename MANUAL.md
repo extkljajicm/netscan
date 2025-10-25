@@ -670,11 +670,22 @@ ping_interval: "2s"
 # Default: "3s"
 # IMPORTANT: Should be > ping_interval to allow error margin
 ping_timeout: "3s"
+
+# Global ping rate limiting (token bucket algorithm)
+# Controls the sustained rate of ICMP pings across all devices
+# Default: 64.0 pings/sec, burst: 256
+# Prevents network bursts, especially on startup when all pingers fire simultaneously
+ping_rate_limit: 64.0    # Tokens per second (sustained ping rate)
+ping_burst_limit: 256    # Token bucket capacity (max burst size)
 ```
 
 **Notes:**
 * Lower intervals (e.g., "1s") provide more data points but increase CPU/network load
 * ping_timeout should be > ping_interval to allow proper error margin (recommended: ping_interval + 1s minimum)
+* ping_rate_limit controls global ping rate across all devices (64.0 = 64 pings/sec sustained)
+* ping_burst_limit allows bursts (e.g., startup) up to this many concurrent pings
+* Recommended: burst_limit >= rate_limit to avoid immediate throttling
+* Example: With 100 devices pinging every 2s, peak load = 50 pings/sec (well under default 64/sec limit)
 
 ### Performance Tuning
 
