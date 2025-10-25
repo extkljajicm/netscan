@@ -273,6 +273,36 @@ docker exec influxdbv2 influx bucket list --org test-org --token netscan-token
 * Both buckets created automatically on first startup
 * Subsequent restarts skip creation if buckets already exist
 
+### Common Operations
+
+#### Building and Running with the Latest Code
+
+When you make changes to the Go source code, you must rebuild the Docker image to include them. The `--build` flag forces Docker Compose to re-run the build process.
+
+```bash
+docker-compose up -d --build
+```
+
+#### Starting a Fresh Deployment
+
+If you need to start with a completely empty database, you can stop the services and remove the persistent InfluxDB data volume. The `-v` flag removes the named volumes defined in `docker-compose.yml`.
+
+```bash
+# This will permanently delete all stored monitoring data.
+docker-compose down -v
+```
+
+After running this, you can start the services again with `docker-compose up -d`.
+
+#### Reclaiming Disk Space
+
+Docker can accumulate a lot of unused images, containers, and build cache over time. You can reclaim this space using Docker's built-in `prune` command.
+
+```bash
+# This command safely removes unused Docker objects.
+docker system prune
+```
+
 ---
 
 ## Section 2: Native systemd Deployment (Alternative)
