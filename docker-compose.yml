@@ -10,6 +10,13 @@ services:
     # Network mode: host allows netscan to access the host network for ICMP and SNMP
     network_mode: host
     
+    # Log rotation configuration to prevent indefinite log file growth
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"  # Maximum size of a single log file
+        max-file: "3"    # Keep 3 most recent log files (~30MB total)
+    
     # Add Linux capability for raw socket access (ICMP ping)
     cap_add:
       - NET_RAW
