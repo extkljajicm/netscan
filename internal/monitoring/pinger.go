@@ -77,10 +77,16 @@ func StartPinger(ctx context.Context, wg *sync.WaitGroup, device state.Device, i
 				continue // Skip execution errors
 			}
 			stats := pinger.Statistics()
-			if stats.PacketsRecv > 0 {
+			// Determine success based on RTT data rather than just PacketsRecv
+			// This is more reliable as the RTT measurements directly prove we got a response
+			successful := len(stats.Rtts) > 0 && stats.AvgRtt > 0
+			
+			if successful {
 				log.Debug().
 					Str("ip", device.IP).
 					Dur("rtt", stats.AvgRtt).
+					Int("packets_recv", stats.PacketsRecv).
+					Int("packets_sent", stats.PacketsSent).
 					Msg("Ping successful")
 				// Update last seen timestamp in state manager
 				if stateMgr != nil {
@@ -95,6 +101,9 @@ func StartPinger(ctx context.Context, wg *sync.WaitGroup, device state.Device, i
 			} else {
 				log.Debug().
 					Str("ip", device.IP).
+					Int("packets_recv", stats.PacketsRecv).
+					Int("packets_sent", stats.PacketsSent).
+					Dur("avg_rtt", stats.AvgRtt).
 					Msg("Ping failed - no response")
 				if err := writer.WritePingResult(device.IP, 0, false); err != nil {
 					log.Error().
