@@ -7,10 +7,12 @@ import (
 
 // Device represents a discovered network device with metadata
 type Device struct {
-	IP       string    // IPv4 address of the device
-	Hostname string    // Device hostname from SNMP or IP address
-	SysDescr string    // SNMP sysDescr MIB-II value
-	LastSeen time.Time // Timestamp of last successful discovery
+	IP               string    // IPv4 address of the device
+	Hostname         string    // Device hostname from SNMP or IP address
+	SysDescr         string    // SNMP sysDescr MIB-II value
+	LastSeen         time.Time // Timestamp of last successful discovery
+	ConsecutiveFails int       // Number of consecutive ping failures (circuit breaker)
+	SuspendedUntil   time.Time // Timestamp until which device is suspended (circuit breaker)
 }
 
 // Manager provides thread-safe device state management
@@ -177,4 +179,66 @@ func (m *Manager) Count() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.devices)
+}
+
+// ReportPingSuccess resets circuit breaker state on successful ping
+func (m *Manager) ReportPingSuccess(ip string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if dev, exists := m.devices[ip]; exists {
+		dev.ConsecutiveFails = 0
+		dev.SuspendedUntil = time.Time{} // Zero time (not suspended)
+	}
+}
+
+// ReportPingFail increments failure count and suspends device if threshold reached
+// Returns true if the device was suspended (circuit breaker tripped)
+func (m *Manager) ReportPingFail(ip string, maxFails int, backoff time.Duration) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	dev, exists := m.devices[ip]
+	if !exists {
+		return false
+	}
+
+	dev.ConsecutiveFails++
+	
+	// Check if we've reached the threshold
+	if dev.ConsecutiveFails >= maxFails {
+		// Trip the circuit breaker
+		dev.ConsecutiveFails = 0 // Reset counter
+		dev.SuspendedUntil = time.Now().Add(backoff)
+		return true // Device is now suspended
+	}
+	
+	return false // Device not suspended
+}
+
+// IsSuspended checks if a device is currently suspended by the circuit breaker
+func (m *Manager) IsSuspended(ip string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	dev, exists := m.devices[ip]
+	if !exists {
+		return false
+	}
+	
+	// Device is suspended if SuspendedUntil is set and in the future
+	return !dev.SuspendedUntil.IsZero() && time.Now().Before(dev.SuspendedUntil)
+}
+
+// GetSuspendedCount returns the number of currently suspended devices
+func (m *Manager) GetSuspendedCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	
+	count := 0
+	now := time.Now()
+	for _, dev := range m.devices {
+		// Use the same logic as IsSuspended
+		if !dev.SuspendedUntil.IsZero() && now.Before(dev.SuspendedUntil) {
+			count++
+		}
+	}
+	return count
 }

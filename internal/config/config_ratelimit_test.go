@@ -174,6 +174,8 @@ PingInterval:          2 * time.Second,
 PingTimeout:           3 * time.Second,
 PingRateLimit:         tt.rateLimit,
 PingBurstLimit:        tt.burstLimit,
+PingMaxConsecutiveFails: 10,              // Circuit breaker default
+PingBackoffDuration:     5 * time.Minute, // Circuit breaker default
 SNMP: SNMPConfig{
 Community: "test-community",
 Port:      161,

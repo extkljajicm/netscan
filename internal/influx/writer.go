@@ -209,14 +209,25 @@ func (w *Writer) WriteDeviceInfo(ip, hostname, sysDescr string) error {
 }
 
 // WriteHealthMetrics writes application health metrics to InfluxDB health bucket
-// Updated to include OS-level RSS in MB (rssMB).
-func (w *Writer) WriteHealthMetrics(deviceCount, pingerCount, goroutines, memMB, rssMB int, influxOK bool, influxSuccess, influxFailed uint64) {
+// Updated to include OS-level RSS in MB (rssMB) and suspended device count.
+func (w *Writer) WriteHealthMetrics(deviceCount, pingerCount, goroutines, memMB, rssMB, suspendedCount int, influxOK bool, influxSuccess, influxFailed uint64) {
+	log.Debug().
+		Int("device_count", deviceCount).
+		Int("active_pingers", pingerCount).
+		Int("suspended_devices", suspendedCount).
+		Int("goroutines", goroutines).
+		Int("memory_mb", memMB).
+		Int("rss_mb", rssMB).
+		Bool("influxdb_ok", influxOK).
+		Msg("Writing health metrics to InfluxDB")
+
 	p := influxdb2.NewPoint(
 		"health_metrics",
 		map[string]string{},
 		map[string]interface{}{
 			"device_count":                deviceCount,
 			"active_pingers":              pingerCount,
+			"suspended_devices":           suspendedCount,
 			"goroutines":                  goroutines,
 			"memory_mb":                   memMB,
 			"rss_mb":                      rssMB,

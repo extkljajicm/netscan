@@ -677,6 +677,13 @@ ping_timeout: "3s"
 # Prevents network bursts, especially on startup when all pingers fire simultaneously
 ping_rate_limit: 64.0    # Tokens per second (sustained ping rate)
 ping_burst_limit: 256    # Token bucket capacity (max burst size)
+
+# Circuit breaker settings for automatic device suspension
+# Automatically suspends devices that fail ping checks consecutively
+# This prevents wasting resources on devices that are likely offline
+# Default: 10 consecutive failures, 5 minute suspension
+ping_max_consecutive_fails: 10  # Number of consecutive failures before suspension
+ping_backoff_duration: "5m"     # Duration to suspend device after max failures
 ```
 
 **Notes:**
@@ -688,6 +695,14 @@ ping_burst_limit: 256    # Token bucket capacity (max burst size)
 * ping_burst_limit allows bursts (e.g., startup) up to this many concurrent pings
 * Recommended: burst_limit >= rate_limit to avoid immediate throttling
 * Example: With 100 devices pinging every 2s, peak load = 50 pings/sec (well under default 64/sec limit)
+
+**Circuit Breaker Notes:**
+* Devices that fail `ping_max_consecutive_fails` consecutive pings are temporarily suspended
+* Suspended devices are not pinged for `ping_backoff_duration` (saves network I/O and reduces log noise)
+* After suspension expires, pinging automatically resumes
+* A single successful ping resets the failure counter to zero
+* Circuit breaker state is tracked per-device in the StateManager
+* Suspended devices remain in the device list and can still be discovered by ICMP discovery scans
 
 ### Performance Tuning
 
@@ -796,13 +811,28 @@ health_report_interval: "10s"
 ```
 
 **Endpoints:**
-* `GET /health` - Detailed JSON status (device count, memory, goroutines, InfluxDB stats)
+* `GET /health` - Detailed JSON status (device count, suspended devices, memory, goroutines, InfluxDB stats)
 * `GET /health/ready` - Readiness probe (200 if InfluxDB OK, 503 if unavailable)
 * `GET /health/live` - Liveness probe (200 if application running)
 
+**Health JSON Response Fields:**
+* `status` (string) - Overall health: "healthy", "degraded", or "unhealthy"
+* `version` (string) - Application version
+* `uptime` (string) - Human-readable uptime since startup
+* `device_count` (int) - Total number of monitored devices
+* `suspended_devices` (int) - Number of devices currently suspended by circuit breaker
+* `active_pingers` (int) - Number of active pinger goroutines
+* `influxdb_ok` (bool) - InfluxDB connectivity status
+* `influxdb_successful` (uint64) - Successful batch writes to InfluxDB
+* `influxdb_failed` (uint64) - Failed batch writes to InfluxDB
+* `goroutines` (int) - Current goroutine count
+* `memory_mb` (uint64) - Go heap allocation in MB
+* `rss_mb` (uint64) - OS-level resident set size in MB
+* `timestamp` (time) - Current timestamp
+
 **Health Metrics Persistence:**
 * Health metrics are automatically written to the health bucket at the configured interval
-* Metrics include: device count, active pingers, goroutines, memory usage, InfluxDB status
+* Metrics include: device count, suspended devices, active pingers, goroutines, memory usage, InfluxDB status
 * Separate bucket prevents health metrics from mixing with device monitoring data
 * Useful for long-term application health tracking and alerting
 
@@ -1693,16 +1723,25 @@ Main application entry point and orchestration logic.
 
 Configuration parsing, validation, and environment variable expansion.
 
-**`internal/config/config.go`** (477 lines)
-* Purpose: YAML configuration parsing with validation
+**`internal/config/config.go`** (540 lines)
+* Purpose: YAML configuration parsing with validation and circuit breaker support
 * Structs: `Config`, `SNMPConfig`, `InfluxDBConfig`
+* Config Fields (Circuit Breaker): `PingMaxConsecutiveFails` (int), `PingBackoffDuration` (time.Duration)
 * Functions: `LoadConfig(path)`, `ValidateConfig(cfg)`, validation helpers
-* Features: Environment variable expansion, duration parsing, network range validation, security checks
+* Features: Environment variable expansion, duration parsing, network range validation, security checks, circuit breaker parameter validation
 * Exports: Config, SNMPConfig, InfluxDBConfig, LoadConfig, ValidateConfig
 
 **`internal/config/config_test.go`**
 * Purpose: Unit tests for configuration parsing and validation
 * Coverage: Valid configs, invalid formats, environment expansion, validation rules
+
+**`internal/config/config_circuitbreaker_test.go`**
+* Purpose: Circuit breaker configuration tests
+* Coverage: Default values, custom values, validation edge cases
+
+**`internal/config/config_ratelimit_test.go`**
+* Purpose: Rate limiting configuration tests
+* Coverage: Default values, custom values, validation warnings
 
 ### `internal/discovery/` Package
 
@@ -1762,26 +1801,41 @@ Centralized structured logging with zerolog.
 
 Continuous ICMP monitoring with dedicated pinger goroutines.
 
-**`internal/monitoring/pinger.go`** (142 lines)
-* Purpose: Continuous ping monitoring for single device
-* Interfaces: `PingWriter`, `StateManager` (for testability)
+**`internal/monitoring/pinger.go`** (226 lines)
+* Purpose: Continuous ping monitoring for single device with circuit breaker support
+* Interfaces: `PingWriter`, `StateManager` (for testability, includes circuit breaker methods)
 * Functions:
-  * `StartPinger(ctx, wg, device, interval, writer, stateMgr)` - Long-running pinger goroutine
+  * `StartPinger(ctx, wg, device, interval, timeout, writer, stateMgr, limiter, counter, maxFails, backoff)` - Long-running pinger goroutine
+  * `performPing(...)` - Legacy ping execution (without circuit breaker)
+  * `performPingWithCircuitBreaker(...)` - Ping execution with circuit breaker integration
   * `validateIPAddress(ip)` - Security validation (prevent loopback, multicast, etc.)
-* Features: Context cancellation, WaitGroup tracking, panic recovery, IP validation
+* Features: Context cancellation, WaitGroup tracking, panic recovery, IP validation, rate limiting, circuit breaker
+* Circuit Breaker: Checks suspension before pinging, reports success/failure to StateManager, logs when circuit trips
 * Exports: PingWriter, StateManager, StartPinger
 
 **`internal/monitoring/pinger_test.go`**
 * Purpose: Unit tests for continuous monitoring
 * Coverage: Pinger lifecycle, context cancellation, error handling, mock interfaces
 
+**`internal/monitoring/pinger_ratelimit_test.go`**
+* Purpose: Rate limiter integration tests
+* Coverage: Token bucket throttling, burst limits, in-flight counter accuracy
+
+**`internal/monitoring/pinger_timer_test.go`**
+* Purpose: Timer behavior tests
+* Coverage: Non-accumulating ping intervals, timer reset, thundering herd prevention
+
+**`internal/monitoring/pinger_timeout_test.go`**
+* Purpose: Timeout parameter validation tests
+* Coverage: Configurable timeouts (not hardcoded), parameter propagation
+
 ### `internal/state/` Package
 
 Thread-safe device state management (single source of truth).
 
-**`internal/state/manager.go`** (180 lines)
-* Purpose: Centralized, thread-safe device registry
-* Struct: `Device` (IP, Hostname, SysDescr, LastSeen), `Manager` (devices map, RWMutex, maxDevices)
+**`internal/state/manager.go`** (240 lines)
+* Purpose: Centralized, thread-safe device registry with circuit breaker support
+* Struct: `Device` (IP, Hostname, SysDescr, LastSeen, ConsecutiveFails, SuspendedUntil), `Manager` (devices map, RWMutex, maxDevices)
 * Functions:
   * `NewManager(maxDevices) *Manager` - Constructor
   * `Add(device)` - Add device with LRU eviction
@@ -1793,12 +1847,25 @@ Thread-safe device state management (single source of truth).
   * `UpdateDeviceSNMP(ip, hostname, sysDescr)` - Enrich with SNMP data
   * `Prune(olderThan) []Device` - Remove stale devices
   * `Count() int` - Current device count
+  * `ReportPingSuccess(ip)` - Reset circuit breaker state on successful ping
+  * `ReportPingFail(ip, maxFails, backoff) bool` - Increment failure count, suspend if threshold reached
+  * `IsSuspended(ip) bool` - Check if device is currently suspended by circuit breaker
+  * `GetSuspendedCount() int` - Return count of currently suspended devices
 * Thread Safety: All operations protected by RWMutex
+* Circuit Breaker: Per-device failure tracking and automatic suspension
 * Exports: Device, Manager, NewManager, all methods
 
 **`internal/state/manager_test.go`**
 * Purpose: Unit tests for state management
 * Coverage: CRUD operations, LRU eviction, timestamp updates, pruning
+
+**`internal/state/manager_circuitbreaker_test.go`**
+* Purpose: Circuit breaker functionality tests
+* Coverage: Ping success/fail reporting, suspension logic, IsSuspended checks, full lifecycle
+
+**`internal/state/manager_suspended_count_test.go`**
+* Purpose: GetSuspendedCount method tests
+* Coverage: Count accuracy, thread safety, consistency with IsSuspended
 
 **`internal/state/manager_concurrent_test.go`**
 * Purpose: Concurrency and race condition tests

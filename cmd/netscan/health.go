@@ -31,6 +31,7 @@ type HealthResponse struct {
 	Version            string    `json:"version"`              // Version string
 	Uptime             string    `json:"uptime"`               // Human readable uptime
 	DeviceCount        int       `json:"device_count"`         // Number of monitored devices
+	SuspendedDevices   int       `json:"suspended_devices"`    // Number of suspended devices (circuit breaker)
 	ActivePingers      int       `json:"active_pingers"`       // Number of active pinger goroutines (accurate count)
 	InfluxDBOK         bool      `json:"influxdb_ok"`          // InfluxDB connectivity status
 	InfluxDBSuccessful uint64    `json:"influxdb_successful"`  // Successful batch writes
@@ -111,6 +112,7 @@ func (hs *HealthServer) GetHealthMetrics() HealthResponse {
 		Version:            "1.0.0", // TODO: Get from build-time variable
 		Uptime:             time.Since(hs.startTime).String(),
 		DeviceCount:        hs.stateMgr.Count(),
+		SuspendedDevices:   hs.stateMgr.GetSuspendedCount(),
 		ActivePingers:      hs.getPingerCount(), // Accurate count from activePingers map
 		InfluxDBOK:         influxOK,
 		InfluxDBSuccessful: hs.writer.GetSuccessfulBatches(),
