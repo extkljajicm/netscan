@@ -40,6 +40,8 @@ type Config struct {
 	SNMP                  SNMPConfig     `yaml:"snmp"`
 	PingInterval          time.Duration  `yaml:"ping_interval"`
 	PingTimeout           time.Duration  `yaml:"ping_timeout"`
+	PingRateLimit         float64        `yaml:"ping_rate_limit"`        // Tokens per second (sustained ping rate)
+	PingBurstLimit        int            `yaml:"ping_burst_limit"`       // Token bucket capacity (max burst)
 	InfluxDB              InfluxDBConfig `yaml:"influxdb"`
 	SNMPDailySchedule     string         `yaml:"snmp_daily_schedule"`  // Daily SNMP scan time (HH:MM format)
 	HealthCheckPort       int            `yaml:"health_check_port"`    // HTTP health check endpoint port
@@ -69,6 +71,8 @@ func LoadConfig(path string) (*Config, error) {
 		SNMP                  SNMPConfig `yaml:"snmp"`
 		PingInterval          string   `yaml:"ping_interval"`
 		PingTimeout           string   `yaml:"ping_timeout"`
+		PingRateLimit         float64  `yaml:"ping_rate_limit"`
+		PingBurstLimit        int      `yaml:"ping_burst_limit"`
 		InfluxDB              struct {
 			URL           string `yaml:"url"`
 			Token         string `yaml:"token"`
@@ -190,6 +194,14 @@ func LoadConfig(path string) (*Config, error) {
 		raw.HealthCheckPort = 8080 // Default: port 8080 for health checks
 	}
 
+	// Set ping rate limiting defaults
+	if raw.PingRateLimit == 0 {
+		raw.PingRateLimit = 64.0 // Default: 64 pings per second
+	}
+	if raw.PingBurstLimit == 0 {
+		raw.PingBurstLimit = 256 // Default: allow bursts up to 256 pings
+	}
+
 	// Apply environment variable expansion to sensitive fields
 	raw.InfluxDB.URL = expandEnv(raw.InfluxDB.URL)
 	raw.InfluxDB.Token = expandEnv(raw.InfluxDB.Token)
@@ -207,6 +219,8 @@ func LoadConfig(path string) (*Config, error) {
 		SNMP:                  raw.SNMP,
 		PingInterval:          pingInterval,
 		PingTimeout:           pingTimeout,
+		PingRateLimit:         raw.PingRateLimit,
+		PingBurstLimit:        raw.PingBurstLimit,
 		InfluxDB: InfluxDBConfig{
 			URL:           raw.InfluxDB.URL,
 			Token:         raw.InfluxDB.Token,
@@ -331,6 +345,18 @@ func ValidateConfig(cfg *Config) (string, error) {
 	}
 	if cfg.MemoryLimitMB < 64 || cfg.MemoryLimitMB > 16384 {
 		return "", fmt.Errorf("memory_limit_mb must be between 64 and 16384, got %d", cfg.MemoryLimitMB)
+	}
+
+	// Validate ping rate limiting settings
+	if cfg.PingRateLimit <= 0 {
+		return "", fmt.Errorf("ping_rate_limit must be greater than 0, got %.2f", cfg.PingRateLimit)
+	}
+	if cfg.PingBurstLimit <= 0 {
+		return "", fmt.Errorf("ping_burst_limit must be greater than 0, got %d", cfg.PingBurstLimit)
+	}
+	// Burst should be at least equal to rate to avoid immediate throttling
+	if float64(cfg.PingBurstLimit) < cfg.PingRateLimit {
+		return "WARNING: ping_burst_limit should be >= ping_rate_limit to avoid immediate throttling", nil
 	}
 
 	return "", nil

@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/kljama/netscan/internal/monitoring"
 	"github.com/kljama/netscan/internal/state"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/time/rate"
 )
 
 func main() {
@@ -65,6 +67,17 @@ func main() {
 		Dur("flush_interval", cfg.InfluxDB.FlushInterval).
 		Msg("InfluxDB connection successful ✓")
 
+	// Initialize global rate limiter for ping operations
+	// This controls the sustained rate of ICMP pings across all devices
+	pingRateLimiter := rate.NewLimiter(rate.Limit(cfg.PingRateLimit), cfg.PingBurstLimit)
+	log.Info().
+		Float64("rate_limit", cfg.PingRateLimit).
+		Int("burst_limit", cfg.PingBurstLimit).
+		Msg("Ping rate limiter initialized")
+
+	// Initialize atomic counter for tracking in-flight pings
+	var currentInFlightPings atomic.Int64
+
 	// Map IP addresses to their pinger cancellation functions
 	// CRITICAL: Protected by mutex to prevent concurrent map access
 	activePingers := make(map[string]context.CancelFunc)
@@ -81,9 +94,7 @@ func main() {
 
 	// Start health check endpoint with accurate pinger count
 	getPingerCount := func() int {
-		pingersMu.Lock()
-		defer pingersMu.Unlock()
-		return len(activePingers)
+		return int(currentInFlightPings.Load())
 	}
 	healthServer := NewHealthServer(cfg.HealthCheckPort, stateMgr, writer, getPingerCount)
 	if err := healthServer.Start(); err != nil {
@@ -386,7 +397,7 @@ func main() {
 						}()
 						
 						// Run the actual pinger
-						monitoring.StartPinger(ctx, &pingerWg, d, cfg.PingInterval, cfg.PingTimeout, writer, stateMgr)
+						monitoring.StartPinger(ctx, &pingerWg, d, cfg.PingInterval, cfg.PingTimeout, writer, stateMgr, pingRateLimiter, &currentInFlightPings)
 						
 						// Notify that this pinger has exited
 						select {

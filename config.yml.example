@@ -58,6 +58,14 @@ ping_interval: "2s"
 # Recommended: ping_interval + 1s minimum
 ping_timeout: "3s"
 
+# Global ping rate limiting (token bucket algorithm)
+# Controls the sustained rate of ICMP pings across all devices to prevent network bursts
+# ping_rate_limit: Tokens added per second (sustained ping rate)
+# ping_burst_limit: Token bucket capacity (max burst size)
+# Example: rate=64.0, burst=256 means 64 pings/sec sustained, up to 256 concurrent
+ping_rate_limit: 64.0   # Default: 64 pings per second (tokens/sec)
+ping_burst_limit: 256   # Default: 256 ping burst capacity
+
 # =============================================================================
 # PERFORMANCE TUNING
 # =============================================================================

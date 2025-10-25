@@ -3,10 +3,12 @@ package monitoring
 import (
 	"context"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kljama/netscan/internal/state"
+	"golang.org/x/time/rate"
 )
 
 type mockWriter struct {
@@ -53,7 +55,9 @@ func TestStartPingerCancel(t *testing.T) {
 	writer := &mockWriter{}
 	stateMgr := &mockStateManager{}
 	ctx, cancel := context.WithCancel(context.Background())
-	go StartPinger(ctx, nil, dev, 10*time.Millisecond, 2*time.Second, writer, stateMgr)
+	limiter := rate.NewLimiter(rate.Limit(100.0), 256)
+	var counter atomic.Int64
+	go StartPinger(ctx, nil, dev, 10*time.Millisecond, 2*time.Second, writer, stateMgr, limiter, &counter)
 	time.Sleep(30 * time.Millisecond)
 	cancel()
 	if !writer.called {
