@@ -64,6 +64,7 @@ services:
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${DOCKER_INFLUXDB_INIT_ADMIN_TOKEN:-netscan-token}
     volumes:
       - influxdbv2-data:/var/lib/influxdb2
+      - ./init-influxdb.sh:/docker-entrypoint-initdb.d/init-influxdb.sh:ro
     healthcheck:
       test: ["CMD", "influx", "ping"]
       interval: 10s

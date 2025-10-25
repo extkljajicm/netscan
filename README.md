@@ -121,6 +121,7 @@ The `docker-compose.yml` configures:
   * Exposed on port 8086
   * Environment variables from `.env` file or defaults
   * Persistent volume `influxdbv2-data` for data retention
+  * Automatic creation of "netscan" and "health" buckets on initialization
   * Health check using `influx ping`
 
 ### Security Notes
