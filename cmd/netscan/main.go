@@ -456,6 +456,7 @@ func main() {
 				metrics.Goroutines,
 				int(metrics.MemoryMB),
 				int(metrics.RSSMB), // new RSS value (MB)
+				metrics.SuspendedDevices, // suspended device count
 				metrics.InfluxDBOK,
 				metrics.InfluxDBSuccessful,
 				metrics.InfluxDBFailed,

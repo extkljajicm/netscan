@@ -811,13 +811,28 @@ health_report_interval: "10s"
 ```
 
 **Endpoints:**
-* `GET /health` - Detailed JSON status (device count, memory, goroutines, InfluxDB stats)
+* `GET /health` - Detailed JSON status (device count, suspended devices, memory, goroutines, InfluxDB stats)
 * `GET /health/ready` - Readiness probe (200 if InfluxDB OK, 503 if unavailable)
 * `GET /health/live` - Liveness probe (200 if application running)
 
+**Health JSON Response Fields:**
+* `status` (string) - Overall health: "healthy", "degraded", or "unhealthy"
+* `version` (string) - Application version
+* `uptime` (string) - Human-readable uptime since startup
+* `device_count` (int) - Total number of monitored devices
+* `suspended_devices` (int) - Number of devices currently suspended by circuit breaker
+* `active_pingers` (int) - Number of active pinger goroutines
+* `influxdb_ok` (bool) - InfluxDB connectivity status
+* `influxdb_successful` (uint64) - Successful batch writes to InfluxDB
+* `influxdb_failed` (uint64) - Failed batch writes to InfluxDB
+* `goroutines` (int) - Current goroutine count
+* `memory_mb` (uint64) - Go heap allocation in MB
+* `rss_mb` (uint64) - OS-level resident set size in MB
+* `timestamp` (time) - Current timestamp
+
 **Health Metrics Persistence:**
 * Health metrics are automatically written to the health bucket at the configured interval
-* Metrics include: device count, active pingers, goroutines, memory usage, InfluxDB status
+* Metrics include: device count, suspended devices, active pingers, goroutines, memory usage, InfluxDB status
 * Separate bucket prevents health metrics from mixing with device monitoring data
 * Useful for long-term application health tracking and alerting
 
@@ -1818,7 +1833,7 @@ Continuous ICMP monitoring with dedicated pinger goroutines.
 
 Thread-safe device state management (single source of truth).
 
-**`internal/state/manager.go`** (223 lines)
+**`internal/state/manager.go`** (240 lines)
 * Purpose: Centralized, thread-safe device registry with circuit breaker support
 * Struct: `Device` (IP, Hostname, SysDescr, LastSeen, ConsecutiveFails, SuspendedUntil), `Manager` (devices map, RWMutex, maxDevices)
 * Functions:
@@ -1835,6 +1850,7 @@ Thread-safe device state management (single source of truth).
   * `ReportPingSuccess(ip)` - Reset circuit breaker state on successful ping
   * `ReportPingFail(ip, maxFails, backoff) bool` - Increment failure count, suspend if threshold reached
   * `IsSuspended(ip) bool` - Check if device is currently suspended by circuit breaker
+  * `GetSuspendedCount() int` - Return count of currently suspended devices
 * Thread Safety: All operations protected by RWMutex
 * Circuit Breaker: Per-device failure tracking and automatic suspension
 * Exports: Device, Manager, NewManager, all methods
@@ -1846,6 +1862,10 @@ Thread-safe device state management (single source of truth).
 **`internal/state/manager_circuitbreaker_test.go`**
 * Purpose: Circuit breaker functionality tests
 * Coverage: Ping success/fail reporting, suspension logic, IsSuspended checks, full lifecycle
+
+**`internal/state/manager_suspended_count_test.go`**
+* Purpose: GetSuspendedCount method tests
+* Coverage: Count accuracy, thread safety, consistency with IsSuspended
 
 **`internal/state/manager_concurrent_test.go`**
 * Purpose: Concurrency and race condition tests

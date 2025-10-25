@@ -226,3 +226,19 @@ func (m *Manager) IsSuspended(ip string) bool {
 	// Device is suspended if SuspendedUntil is set and in the future
 	return !dev.SuspendedUntil.IsZero() && time.Now().Before(dev.SuspendedUntil)
 }
+
+// GetSuspendedCount returns the number of currently suspended devices
+func (m *Manager) GetSuspendedCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	
+	count := 0
+	now := time.Now()
+	for _, dev := range m.devices {
+		// Use the same logic as IsSuspended
+		if !dev.SuspendedUntil.IsZero() && now.Before(dev.SuspendedUntil) {
+			count++
+		}
+	}
+	return count
+}
