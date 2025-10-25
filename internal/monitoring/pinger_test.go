@@ -47,6 +47,20 @@ func (m *mockStateManager) UpdateLastSeen(ip string) {
 	m.lastSeenIP = ip
 }
 
+func (m *mockStateManager) ReportPingSuccess(ip string) {
+	// Mock implementation - could track calls if needed
+}
+
+func (m *mockStateManager) ReportPingFail(ip string, maxFails int, backoff time.Duration) bool {
+	// Mock implementation - return false (not suspended)
+	return false
+}
+
+func (m *mockStateManager) IsSuspended(ip string) bool {
+	// Mock implementation - return false (not suspended)
+	return false
+}
+
 func TestStartPingerCancel(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("Test requires root privileges for ICMP ping")
@@ -57,7 +71,7 @@ func TestStartPingerCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	limiter := rate.NewLimiter(rate.Limit(100.0), 256)
 	var counter atomic.Int64
-	go StartPinger(ctx, nil, dev, 10*time.Millisecond, 2*time.Second, writer, stateMgr, limiter, &counter)
+	go StartPinger(ctx, nil, dev, 10*time.Millisecond, 2*time.Second, writer, stateMgr, limiter, &counter, 10, 5*time.Minute)
 	time.Sleep(30 * time.Millisecond)
 	cancel()
 	if !writer.called {

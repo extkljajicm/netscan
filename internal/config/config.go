@@ -42,6 +42,8 @@ type Config struct {
 	PingTimeout           time.Duration  `yaml:"ping_timeout"`
 	PingRateLimit         float64        `yaml:"ping_rate_limit"`        // Tokens per second (sustained ping rate)
 	PingBurstLimit        int            `yaml:"ping_burst_limit"`       // Token bucket capacity (max burst)
+	PingMaxConsecutiveFails int          `yaml:"ping_max_consecutive_fails"` // Circuit breaker: max consecutive failures before suspension
+	PingBackoffDuration   time.Duration  `yaml:"ping_backoff_duration"`  // Circuit breaker: suspension duration after max failures
 	InfluxDB              InfluxDBConfig `yaml:"influxdb"`
 	SNMPDailySchedule     string         `yaml:"snmp_daily_schedule"`  // Daily SNMP scan time (HH:MM format)
 	HealthCheckPort       int            `yaml:"health_check_port"`    // HTTP health check endpoint port
@@ -63,17 +65,19 @@ func LoadConfig(path string) (*Config, error) {
 
 	// Raw config struct for YAML parsing with string duration fields
 	var raw struct {
-		DiscoveryInterval     string   `yaml:"discovery_interval"`
-		IcmpDiscoveryInterval string   `yaml:"icmp_discovery_interval"`
-		IcmpWorkers           int      `yaml:"icmp_workers"`
-		SnmpWorkers           int      `yaml:"snmp_workers"`
-		Networks              []string `yaml:"networks"`
-		SNMP                  SNMPConfig `yaml:"snmp"`
-		PingInterval          string   `yaml:"ping_interval"`
-		PingTimeout           string   `yaml:"ping_timeout"`
-		PingRateLimit         float64  `yaml:"ping_rate_limit"`
-		PingBurstLimit        int      `yaml:"ping_burst_limit"`
-		InfluxDB              struct {
+		DiscoveryInterval       string   `yaml:"discovery_interval"`
+		IcmpDiscoveryInterval   string   `yaml:"icmp_discovery_interval"`
+		IcmpWorkers             int      `yaml:"icmp_workers"`
+		SnmpWorkers             int      `yaml:"snmp_workers"`
+		Networks                []string `yaml:"networks"`
+		SNMP                    SNMPConfig `yaml:"snmp"`
+		PingInterval            string   `yaml:"ping_interval"`
+		PingTimeout             string   `yaml:"ping_timeout"`
+		PingRateLimit           float64  `yaml:"ping_rate_limit"`
+		PingBurstLimit          int      `yaml:"ping_burst_limit"`
+		PingMaxConsecutiveFails int      `yaml:"ping_max_consecutive_fails"`
+		PingBackoffDuration     string   `yaml:"ping_backoff_duration"`
+		InfluxDB                struct {
 			URL           string `yaml:"url"`
 			Token         string `yaml:"token"`
 			Org           string `yaml:"org"`
@@ -150,6 +154,15 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 
+	// Parse PingBackoffDuration if specified
+	var pingBackoffDuration time.Duration
+	if raw.PingBackoffDuration != "" {
+		pingBackoffDuration, err = time.ParseDuration(raw.PingBackoffDuration)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ping_backoff_duration: %v", err)
+		}
+	}
+
 	// Set default SNMP timeout if not specified
 	if raw.SNMP.Timeout == 0 {
 		raw.SNMP.Timeout = 5 * time.Second
@@ -202,6 +215,14 @@ func LoadConfig(path string) (*Config, error) {
 		raw.PingBurstLimit = 256 // Default: allow bursts up to 256 pings
 	}
 
+	// Set circuit breaker defaults
+	if raw.PingMaxConsecutiveFails == 0 {
+		raw.PingMaxConsecutiveFails = 10 // Default: 10 consecutive failures before suspension
+	}
+	if pingBackoffDuration == 0 {
+		pingBackoffDuration = 5 * time.Minute // Default: 5 minute suspension
+	}
+
 	// Apply environment variable expansion to sensitive fields
 	raw.InfluxDB.URL = expandEnv(raw.InfluxDB.URL)
 	raw.InfluxDB.Token = expandEnv(raw.InfluxDB.Token)
@@ -211,16 +232,18 @@ func LoadConfig(path string) (*Config, error) {
 	raw.SNMP.Community = expandEnv(raw.SNMP.Community)
 
 	return &Config{
-		DiscoveryInterval:     discoveryInterval,
-		IcmpDiscoveryInterval: icmpDiscoveryInterval,
-		IcmpWorkers:           raw.IcmpWorkers,
-		SnmpWorkers:           raw.SnmpWorkers,
-		Networks:              raw.Networks,
-		SNMP:                  raw.SNMP,
-		PingInterval:          pingInterval,
-		PingTimeout:           pingTimeout,
-		PingRateLimit:         raw.PingRateLimit,
-		PingBurstLimit:        raw.PingBurstLimit,
+		DiscoveryInterval:       discoveryInterval,
+		IcmpDiscoveryInterval:   icmpDiscoveryInterval,
+		IcmpWorkers:             raw.IcmpWorkers,
+		SnmpWorkers:             raw.SnmpWorkers,
+		Networks:                raw.Networks,
+		SNMP:                    raw.SNMP,
+		PingInterval:            pingInterval,
+		PingTimeout:             pingTimeout,
+		PingRateLimit:           raw.PingRateLimit,
+		PingBurstLimit:          raw.PingBurstLimit,
+		PingMaxConsecutiveFails: raw.PingMaxConsecutiveFails,
+		PingBackoffDuration:     pingBackoffDuration,
 		InfluxDB: InfluxDBConfig{
 			URL:           raw.InfluxDB.URL,
 			Token:         raw.InfluxDB.Token,
@@ -357,6 +380,14 @@ func ValidateConfig(cfg *Config) (string, error) {
 	// Burst should be at least equal to rate to avoid immediate throttling
 	if float64(cfg.PingBurstLimit) < cfg.PingRateLimit {
 		return "WARNING: ping_burst_limit should be >= ping_rate_limit to avoid immediate throttling", nil
+	}
+
+	// Validate circuit breaker settings
+	if cfg.PingMaxConsecutiveFails <= 0 {
+		return "", fmt.Errorf("ping_max_consecutive_fails must be greater than 0, got %d", cfg.PingMaxConsecutiveFails)
+	}
+	if cfg.PingBackoffDuration < time.Minute {
+		return "", fmt.Errorf("ping_backoff_duration must be at least 1 minute, got %v", cfg.PingBackoffDuration)
 	}
 
 	return "", nil
