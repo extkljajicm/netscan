@@ -795,6 +795,7 @@ influxdb:
   * Tags: none
   * Fields: `device_count` (int), `active_pingers` (int), `goroutines` (int), `memory_mb` (int), `rss_mb` (int), `influxdb_ok` (bool), `influxdb_successful_batches` (uint64), `influxdb_failed_batches` (uint64)
   * Note: `memory_mb` is Go heap allocation (runtime.MemStats.Alloc), `rss_mb` is OS-level resident set size (Linux /proc/self/status VmRSS)
+  * Note: `active_pingers` measures concurrent in-flight ping operations (typically 1-5 in healthy networks), not total managed devices
 
 ### Health Check Endpoint
 
@@ -821,7 +822,20 @@ health_report_interval: "10s"
 * `uptime` (string) - Human-readable uptime since startup
 * `device_count` (int) - Total number of monitored devices
 * `suspended_devices` (int) - Number of devices currently suspended by circuit breaker
-* `active_pingers` (int) - Number of active pinger goroutines
+* `active_pingers` (int) - Number of concurrent in-flight ping operations
+  * **IMPORTANT:** This metric represents the number of ping operations currently executing (concurrent in-flight pings), **NOT** the total number of managed devices.
+  * The value is calculated using Little's Law: `L = λ × W` where:
+    * `L` = concurrent in-flight pings (this metric)
+    * `λ` = ping rate (capped by `ping_rate_limit`, default 64 pps)
+    * `W` = average ping duration (RTT for successful pings, or `ping_timeout` for failing pings)
+  * **Healthy Network Example:** With 360 devices, `ping_rate_limit: 64` pps, and 15ms average RTT:
+    * Expected `active_pingers` ≈ 64 × 0.015 = **~1 concurrent ping**
+    * This is normal! Pings complete quickly, so only 1-2 are in-flight at any moment.
+  * **Failing Network Example:** If 10% of devices timeout at 7 seconds:
+    * Average duration: (0.9 × 0.015s) + (0.1 × 7s) = 0.7135s
+    * Expected `active_pingers` ≈ 64 × 0.7135 = **~46 concurrent pings**
+  * **Key Insight:** Low values (1-5) indicate a **healthy network** with fast responses. High values (50+) indicate network problems with timeouts.
+  * The `ping_timeout` setting only affects **failing** pings; it does not represent typical ping duration in a healthy network.
 * `influxdb_ok` (bool) - InfluxDB connectivity status
 * `influxdb_successful` (uint64) - Successful batch writes to InfluxDB
 * `influxdb_failed` (uint64) - Failed batch writes to InfluxDB
