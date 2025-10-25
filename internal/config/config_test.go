@@ -129,24 +129,24 @@ influxdb:
 	}
 	
 	// Test new performance defaults
-	if cfg.IcmpWorkers != 256 {
-		t.Errorf("expected IcmpWorkers default to be 256, got %d", cfg.IcmpWorkers)
+	if cfg.IcmpWorkers != 1024 {
+		t.Errorf("expected IcmpWorkers default to be 1024, got %d", cfg.IcmpWorkers)
 	}
 	
-	if cfg.MaxConcurrentPingers != 80000 {
-		t.Errorf("expected MaxConcurrentPingers default to be 80000, got %d", cfg.MaxConcurrentPingers)
+	if cfg.MaxConcurrentPingers != 20000 {
+		t.Errorf("expected MaxConcurrentPingers default to be 20000, got %d", cfg.MaxConcurrentPingers)
 	}
 	
-	if cfg.MaxDevices != 80000 {
-		t.Errorf("expected MaxDevices default to be 80000, got %d", cfg.MaxDevices)
+	if cfg.MaxDevices != 20000 {
+		t.Errorf("expected MaxDevices default to be 20000, got %d", cfg.MaxDevices)
 	}
 	
-	if cfg.MemoryLimitMB != 8192 {
-		t.Errorf("expected MemoryLimitMB default to be 8192, got %d", cfg.MemoryLimitMB)
+	if cfg.MemoryLimitMB != 16384 {
+		t.Errorf("expected MemoryLimitMB default to be 16384, got %d", cfg.MemoryLimitMB)
 	}
 	
-	if cfg.InfluxDB.BatchSize != 1000 {
-		t.Errorf("expected InfluxDB.BatchSize default to be 1000, got %d", cfg.InfluxDB.BatchSize)
+	if cfg.InfluxDB.BatchSize != 5000 {
+		t.Errorf("expected InfluxDB.BatchSize default to be 5000, got %d", cfg.InfluxDB.BatchSize)
 	}
 }
 

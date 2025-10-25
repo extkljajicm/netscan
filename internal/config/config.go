@@ -153,26 +153,26 @@ func LoadConfig(path string) (*Config, error) {
 
 	// Set default values if not specified
 	if raw.IcmpWorkers == 0 {
-		raw.IcmpWorkers = 256
+		raw.IcmpWorkers = 1024
 	}
 	if raw.SnmpWorkers == 0 {
-		raw.SnmpWorkers = 32
+		raw.SnmpWorkers = 256
 	}
 	if raw.MaxConcurrentPingers == 0 {
-		raw.MaxConcurrentPingers = 80000 // Default: allow up to 80,000 concurrent pingers
+		raw.MaxConcurrentPingers = 20000 // Default: allow up to 20,000 concurrent pingers
 	}
 	if raw.MaxDevices == 0 {
-		raw.MaxDevices = 80000 // Default: allow up to 80,000 devices
+		raw.MaxDevices = 20000 // Default: allow up to 20,000 devices
 	}
 	if minScanInterval == 0 {
 		minScanInterval = 1 * time.Minute // Default: minimum 1 minute between scans
 	}
 	if raw.MemoryLimitMB == 0 {
-		raw.MemoryLimitMB = 8192 // Default: 8192MB memory limit
+		raw.MemoryLimitMB = 16384 // Default: 16384MB memory limit
 	}
 	// Set InfluxDB batch defaults
 	if raw.InfluxDB.BatchSize == 0 {
-		raw.InfluxDB.BatchSize = 1000 // Default: batch 1000 points
+		raw.InfluxDB.BatchSize = 5000 // Default: batch 5000 points
 	}
 	if flushInterval == 0 {
 		flushInterval = 5 * time.Second // Default: flush every 5 seconds
