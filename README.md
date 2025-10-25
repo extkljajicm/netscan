@@ -665,6 +665,36 @@ memory_limit_mb: 16384
 * High-performance defaults support up to 20,000 devices with 16GB RAM
 * For small deployments, consider: max_devices: 1000, max_concurrent_pingers: 1000, memory_limit_mb: 512
 
+### Common Maintenance Tasks
+
+#### Building and Running with the Latest Code
+
+When you make changes to the Go source code, you must rebuild the Docker image to include them. The `--build` flag forces Docker Compose to re-run the build process.
+
+```bash
+docker-compose up -d --build
+```
+
+#### Starting a Fresh Deployment
+
+If you need to start with a completely empty database, you can stop the services and remove the persistent InfluxDB data volume. The `-v` flag removes the named volumes defined in `docker-compose.yml`.
+
+```bash
+# This will permanently delete all stored monitoring data.
+docker-compose down -v
+```
+
+After running this, you can start the services again with `docker-compose up -d`.
+
+#### Reclaiming Disk Space
+
+Docker can accumulate a lot of unused images, containers, and build cache over time. You can reclaim this space using Docker's built-in `prune` command.
+
+```bash
+# This command safely removes unused Docker objects
+docker system prune
+```
+
 ### Complete Example
 
 ```yaml

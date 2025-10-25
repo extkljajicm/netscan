@@ -852,3 +852,13 @@ The current implementation prioritizes:
 * **Maintainability:** Clean architecture, comprehensive tests
 
 Adding these features prematurely would increase code complexity, testing burden, and potential failure modes without proportional benefit at current scale.
+
+---
+
+## Common Maintenance Procedures
+
+- **To start a fresh deployment and delete all InfluxDB data:** Use the command `docker-compose down -v`. This stops the containers and removes the associated `influxdb-data` volume.
+
+- **To build and run the latest code changes:** Use the command `docker-compose up -d --build`. This forces a rebuild of the `netscan` Docker image from the local source code before starting the container.
+
+- **To reclaim unused Docker disk space:** Use the command `docker system prune`. This cleans up dangling images, stopped containers, and unused build cache.
