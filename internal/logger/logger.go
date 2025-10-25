@@ -2,6 +2,7 @@ package logger
 
 import (
 	"os"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -9,8 +10,11 @@ import (
 )
 
 // Setup initializes the global logger with appropriate settings
+// - debugMode param still works, but we also honor DEBUG=true env var (case-insensitive)
+// - if ENVIRONMENT=development we use a human-friendly console writer
+// - Caller() is enabled so debug lines include file:line (helps track false positives)
 func Setup(debugMode bool) {
-	// Set up console writer with colors for local development
+	// Human-friendly console output for local development
 	if os.Getenv("ENVIRONMENT") == "development" {
 		log.Logger = log.Output(zerolog.ConsoleWriter{
 			Out:        os.Stdout,
@@ -18,17 +22,18 @@ func Setup(debugMode bool) {
 		})
 	}
 
-	// Set log level
-	if debugMode {
+	// allow enabling debug via env var DEBUG=true as a quick toggle
+	if debugMode || strings.EqualFold(os.Getenv("DEBUG"), "true") {
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	} else {
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	}
 
-	// Add common fields
+	// Add common fields and caller information to help trace where logs originate
 	log.Logger = log.With().
 		Str("service", "netscan").
 		Timestamp().
+		Caller().
 		Logger()
 }
 
