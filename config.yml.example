@@ -74,7 +74,8 @@ influxdb:
   url: "http://localhost:8086"
   token: "${INFLUXDB_TOKEN}"  # Default: 'netscan-token' (set via docker-compose.yml or .env)
   org: "${INFLUXDB_ORG}"      # Default: 'test-org' (set via docker-compose.yml or .env)
-  bucket: "netscan"
+  bucket: "netscan"           # Bucket for device metrics (ping, device_info)
+  health_bucket: "health"     # Bucket for application health metrics (default: 'health')
   batch_size: 5000            # Number of points to batch before writing (default: 5000)
   flush_interval: "5s"        # Maximum time to hold points before flushing (default: 5s)
 
@@ -82,8 +83,9 @@ influxdb:
 # HEALTH CHECK ENDPOINT
 # =============================================================================
 # HTTP endpoint for monitoring and Docker HEALTHCHECK
-health_check_port: 8080       # Port for health check endpoint (default: 8080)
-                              # Provides /health, /health/ready, /health/live endpoints
+health_check_port: 8080           # Port for health check endpoint (default: 8080)
+                                  # Provides /health, /health/ready, /health/live endpoints
+health_report_interval: "10s"     # Interval for writing health metrics to InfluxDB (default: 10s)
 
 # =============================================================================
 # RESOURCE PROTECTION SETTINGS

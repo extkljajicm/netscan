@@ -112,6 +112,7 @@ The `docker-compose.yml` configures:
   * Runs as root (required for ICMP in containers, see Security Notes)
   * Mounts `config.yml` as read-only volume at `/app/config.yml`
   * Environment variables from `.env` file or defaults
+  * Log rotation configured (10MB max per file, 3 files retained, ~30MB total)
   * HEALTHCHECK on `/health/live` endpoint (30s interval, 3s timeout, 3 retries, 40s start period)
   * Auto-restart on failure
 
@@ -120,6 +121,7 @@ The `docker-compose.yml` configures:
   * Exposed on port 8086
   * Environment variables from `.env` file or defaults
   * Persistent volume `influxdbv2-data` for data retention
+  * Automatic creation of "netscan" and "health" buckets on initialization
   * Health check using `influx ping`
 
 ### Security Notes

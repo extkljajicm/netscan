@@ -125,6 +125,7 @@ The `docker-compose.yml` configures:
   * Runs as root (required for ICMP in containers, see Security Notes)
   * Mounts `config.yml` as read-only volume at `/app/config.yml`
   * Environment variables from `.env` file or defaults
+  * Log rotation configured (10MB max per file, 3 files retained, ~30MB total)
   * HEALTHCHECK on `/health/live` endpoint (30s interval, 3s timeout, 3 retries, 40s start period)
   * Auto-restart on failure
 
@@ -133,6 +134,7 @@ The `docker-compose.yml` configures:
   * Exposed on port 8086
   * Environment variables from `.env` file or defaults
   * Persistent volume `influxdbv2-data` for data retention
+  * Automatic creation of "netscan" and "health" buckets on initialization
   * Health check using `influx ping`
 
 ### Security Notes
@@ -188,6 +190,88 @@ curl http://localhost:8086/health
 # token: netscan-token (default) or your .env value
 # org: test-org (default) or your .env value
 ```
+
+**Health bucket not found errors:**
+```bash
+# The init-influxdb.sh script should automatically create the health bucket
+# If you see errors, verify the init script is mounted:
+docker compose config | grep init-influxdb.sh
+
+# Check InfluxDB logs for bucket creation
+docker compose logs influxdb | grep -i "health bucket"
+
+# Manually verify buckets exist
+docker exec influxdbv2 influx bucket list --org test-org --token netscan-token
+```
+
+### Log Management
+
+**Docker Log Rotation:**
+
+The netscan service is configured with automatic log rotation to prevent disk space exhaustion:
+
+* **Max log file size:** 10MB per file
+* **Files retained:** 3 most recent files
+* **Total disk usage:** ~30MB maximum
+
+Configuration in `docker-compose.yml`:
+```yaml
+logging:
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+```
+
+**Viewing logs:**
+```bash
+# View recent logs
+docker compose logs netscan
+
+# Follow logs in real-time
+docker compose logs -f netscan
+
+# View logs with timestamps
+docker compose logs -t netscan
+
+# View last 100 lines
+docker compose logs --tail=100 netscan
+```
+
+**Log rotation behavior:**
+* Logs are rotated automatically when a file reaches 10MB
+* Oldest log files are deleted when more than 3 files exist
+* No manual intervention required
+* Prevents the common issue of unbounded log growth in long-running containers
+
+### InfluxDB Bucket Initialization
+
+**Automatic Bucket Creation:**
+
+The InfluxDB service automatically creates two buckets on initialization:
+
+1. **netscan bucket:** Stores device metrics (ping results, device_info)
+2. **health bucket:** Stores application health metrics (device count, memory, goroutines)
+
+The `init-influxdb.sh` script:
+* Waits for InfluxDB to be ready
+* Checks if the "health" bucket exists
+* Creates it automatically if missing
+* Uses the same retention period as the main bucket (default: 1 week)
+
+**Manual bucket verification:**
+```bash
+# List all buckets
+docker exec influxdbv2 influx bucket list --org test-org --token netscan-token
+
+# Expected output should include both "netscan" and "health" buckets
+```
+
+**Bucket configuration:**
+* Retention period: 1 week (default, configurable via `DOCKER_INFLUXDB_INIT_RETENTION`)
+* Organization: test-org (default, configurable via `DOCKER_INFLUXDB_INIT_ORG`)
+* Both buckets created automatically on first startup
+* Subsequent restarts skip creation if buckets already exist
 
 ---
 

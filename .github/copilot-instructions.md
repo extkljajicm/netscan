@@ -32,6 +32,8 @@ The service implements four independent, concurrent monitoring workflows:
 - **Critical Security Note:** Container **must run as root** (non-negotiable requirement for ICMP raw socket access in Linux containers, even with CAP_NET_RAW)
 - Host networking mode (`network_mode: host`) for direct network access to scan targets
 - Environment variable expansion via docker-compose.yml (uses `.env` file or inline defaults)
+- **Log rotation configured:** 10MB max per file, 3 files retained (~30MB total disk usage)
+- **Dual-bucket InfluxDB:** Automatic creation of "netscan" and "health" buckets via `init-influxdb.sh`
 - HEALTHCHECK directive using `/health/live` endpoint
 - Automated deployment validation via `docker-verify.sh` script in CI/CD
 - Configuration: mount `config.yml` as read-only volume at `/app/config.yml`

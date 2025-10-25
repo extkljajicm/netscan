@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Docker log rotation**: Configured automatic log rotation for netscan service in docker-compose.yml
+  - Prevents indefinite log file growth and disk space exhaustion
+  - Max log file size: 10MB per file
+  - Retains 3 most recent log files (~30MB total disk usage)
+  - Uses Docker's json-file logging driver with rotation options
+- **Automatic health bucket creation**: InfluxDB initialization script for dual-bucket architecture
+  - New `init-influxdb.sh` script automatically creates "health" bucket on container startup
+  - Mounted to `/docker-entrypoint-initdb.d/` for automatic execution
+  - Waits for InfluxDB to be ready before bucket creation
+  - Uses same retention period as main bucket (default: 1w)
+  - Fixes "bucket 'health' not found" errors when writing health metrics
+  - Documentation updated in config.yml.example to include `health_bucket` field
+
 ### Changed
 
 - **Performance optimization for high-resource hardware**: Updated default configuration values to support large-scale deployments
