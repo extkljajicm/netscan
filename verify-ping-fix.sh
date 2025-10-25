@@ -32,21 +32,24 @@ echo "  icmp_workers:   $ICMP_WORKERS"
 echo "  snmp_workers:   $SNMP_WORKERS"
 echo ""
 
-# Function to convert duration string to seconds (simplified)
+# Function to convert duration string to seconds (handles simple cases)
 duration_to_seconds() {
     local dur=$1
     # Remove quotes if present
     dur=$(echo "$dur" | tr -d '"')
-    # Extract number and unit
-    local num=$(echo "$dur" | sed 's/[^0-9]//g')
-    local unit=$(echo "$dur" | sed 's/[0-9]//g')
     
-    case "$unit" in
-        s) echo "$num" ;;
-        m) echo $((num * 60)) ;;
-        h) echo $((num * 3600)) ;;
-        *) echo "0" ;;
-    esac
+    # Handle simple cases: Xs, Xm, Xh
+    if [[ "$dur" =~ ^([0-9]+)s$ ]]; then
+        echo "${BASH_REMATCH[1]}"
+    elif [[ "$dur" =~ ^([0-9]+)m$ ]]; then
+        echo $((BASH_REMATCH[1] * 60))
+    elif [[ "$dur" =~ ^([0-9]+)h$ ]]; then
+        echo $((BASH_REMATCH[1] * 3600))
+    else
+        # Complex duration (e.g., "1h30m") - not supported by this simple parser
+        # Return -1 to indicate parsing failure
+        echo "-1"
+    fi
 }
 
 INTERVAL_SEC=$(duration_to_seconds "$PING_INTERVAL")
@@ -58,7 +61,12 @@ echo "==================================================================="
 echo ""
 
 # Check 1: Timeout vs Interval
-if [ "$TIMEOUT_SEC" -le "$INTERVAL_SEC" ]; then
+# Skip timeout comparison if parsing failed (complex duration format)
+if [ "$INTERVAL_SEC" -eq -1 ] || [ "$TIMEOUT_SEC" -eq -1 ]; then
+    echo "⚠️  NOTE: Complex duration format detected, skipping timeout comparison"
+    echo "   Please manually verify: ping_timeout > ping_interval"
+    echo ""
+elif [ "$TIMEOUT_SEC" -le "$INTERVAL_SEC" ]; then
     echo "❌ WARNING: ping_timeout ($PING_TIMEOUT) <= ping_interval ($PING_INTERVAL)"
     echo "   This creates zero error margin and will cause high failure rates."
     echo "   RECOMMENDATION: Set ping_timeout to at least ping_interval + 1s"
