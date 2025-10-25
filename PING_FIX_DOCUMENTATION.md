@@ -13,6 +13,7 @@ This was incorrect because a non-zero round-trip time proves the device responde
 The original code in `internal/monitoring/pinger.go` determined ping success based solely on the `PacketsRecv` field from the pro-bing library's statistics:
 
 ```go
+// OLD (PROBLEMATIC) CODE:
 stats := pinger.Statistics()
 if stats.PacketsRecv > 0 {
     // Write success with RTT
@@ -37,6 +38,7 @@ This suggests that the pro-bing library has edge cases where `PacketsRecv` may n
 The fix changes the success detection logic to rely directly on the RTT data rather than the packet counter:
 
 ```go
+// NEW (FIXED) CODE:
 stats := pinger.Statistics()
 // Determine success based on RTT data rather than just PacketsRecv
 // This is more reliable as the RTT measurements directly prove we got a response
