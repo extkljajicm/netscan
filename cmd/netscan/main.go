@@ -334,7 +334,7 @@ func main() {
 					}
 					
 					pingerWg.Add(1)
-					go monitoring.StartPinger(pingerCtx, &pingerWg, *dev, cfg.PingInterval, writer, stateMgr)
+					go monitoring.StartPinger(pingerCtx, &pingerWg, *dev, cfg.PingInterval, cfg.PingTimeout, writer, stateMgr)
 				}
 			}
 			

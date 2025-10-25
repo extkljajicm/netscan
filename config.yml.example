@@ -54,16 +54,25 @@ snmp:
 ping_interval: "2s"
 
 # Timeout for individual ping operations
-ping_timeout: "2s"
+# IMPORTANT: Should be > ping_interval to allow error margin
+# Recommended: ping_interval + 1s minimum
+ping_timeout: "3s"
 
 # =============================================================================
 # PERFORMANCE TUNING
 # =============================================================================
-# Number of concurrent ICMP ping workers (recommended: 2-4x CPU cores)
-icmp_workers: 1024
+# Number of concurrent ICMP ping workers for discovery sweeps
+# Recommended values:
+#   - Small networks (<500 devices): 64 workers
+#   - Medium networks (500-2000 devices): 128 workers
+#   - Large networks (2000+ devices): 256 workers
+# WARNING: Values >256 may cause kernel raw socket buffer overflow
+#          leading to false-negative ping failures on continuous monitors
+icmp_workers: 64
 
-# Number of concurrent SNMP polling workers (recommended: 1-2x CPU cores)
-snmp_workers: 256
+# Number of concurrent SNMP polling workers
+# Recommended: 25-50% of icmp_workers to avoid overwhelming SNMP agents
+snmp_workers: 32
 
 # =============================================================================
 # INFLUXDB SETTINGS

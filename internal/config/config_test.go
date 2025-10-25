@@ -129,8 +129,12 @@ influxdb:
 	}
 	
 	// Test new performance defaults
-	if cfg.IcmpWorkers != 1024 {
-		t.Errorf("expected IcmpWorkers default to be 1024, got %d", cfg.IcmpWorkers)
+	if cfg.IcmpWorkers != 64 {
+		t.Errorf("expected IcmpWorkers default to be 64, got %d", cfg.IcmpWorkers)
+	}
+	
+	if cfg.SnmpWorkers != 32 {
+		t.Errorf("expected SnmpWorkers default to be 32, got %d", cfg.SnmpWorkers)
 	}
 	
 	if cfg.MaxConcurrentPingers != 20000 {

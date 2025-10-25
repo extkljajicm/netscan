@@ -24,7 +24,7 @@ type StateManager interface {
 }
 
 // StartPinger runs continuous ICMP monitoring for a single device
-func StartPinger(ctx context.Context, wg *sync.WaitGroup, device state.Device, interval time.Duration, writer PingWriter, stateMgr StateManager) {
+func StartPinger(ctx context.Context, wg *sync.WaitGroup, device state.Device, interval time.Duration, timeout time.Duration, writer PingWriter, stateMgr StateManager) {
 	// Panic recovery for pinger goroutine
 	defer func() {
 		if r := recover(); r != nil {
@@ -67,7 +67,7 @@ func StartPinger(ctx context.Context, wg *sync.WaitGroup, device state.Device, i
 				continue // Skip invalid IP configurations
 			}
 			pinger.Count = 1                              // Single ICMP echo request per interval
-			pinger.Timeout = 2 * time.Second              // 2-second ping timeout
+			pinger.Timeout = timeout                      // Use configured ping timeout
 			pinger.SetPrivileged(true)                    // Use raw ICMP sockets (requires root)
 			if err := pinger.Run(); err != nil {
 				log.Error().

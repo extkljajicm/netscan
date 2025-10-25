@@ -89,7 +89,7 @@ To keep the project focused, we explicitly **do not** do the following. Do not s
 **Key Configuration Parameters:**
 * `icmp_discovery_interval` (duration): How often to scan for new devices (e.g., "5m")
 * `ping_interval` (duration): How often to ping known devices (e.g., "2s")
-* `ping_timeout` (duration): Timeout for individual ping operations (e.g., "2s")
+* `ping_timeout` (duration): Timeout for individual ping operations (e.g., "3s")
 * `snmp_daily_schedule` (string): Time for daily SNMP scan in HH:MM format (e.g., "02:00"), empty string disables
 * `health_check_port` (int): HTTP server port for health endpoints (default: 8080)
 * `health_report_interval` (duration): Interval for writing health metrics to InfluxDB (default: "10s")
@@ -343,6 +343,11 @@ These are the rules and best practices derived from production implementation. A
 * **Mandate: Summary logs MUST report both success and failure counts.** (e.g., "Enriched X devices (failed: Y)").
 * **Mandate: The InfluxDB schema MUST remain simple.** Do not add fields that are not actively used for monitoring or queries (e.g., `sysObjectID`). The primary schema is `device_info` with `IP`, `hostname`, and `snmp_description`.
 * **Mandate: Log all successful writes to InfluxDB.** Include the device identifier (IP/hostname) in the log message for debugging and confirmation.
+* **Mandate: Documentation Parity.** Code changes are **not complete** until all user-facing documentation (`MANUAL.md` and `README.md`) is updated to reflect the change. This applies to *all* changes, including bug fixes, new features, and, critically, **any change to a default value**. Specifically, you must verify that:
+    * `config.yml.example` matches the new defaults.
+    * The "Configuration Reference" in `MANUAL.md` is updated with any new parameters or modified defaults.
+    * Any performance tuning guidance or tables (like the "Worker Count Guidelines") are adjusted to reflect new recommendations.
+    * Documentation is a core part of the commit, not a future task.
 
 ### Observability & Monitoring Mandates
 
