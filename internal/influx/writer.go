@@ -322,7 +322,7 @@ func (w *Writer) flushWithRetry(points []*write.Point, maxRetries int) {
 		default:
 			// No error, write successful - increment success counter
 			w.successfulBatches.Add(1)
-			log.Info().
+			log.Debug().
 				Int("points", len(points)).
 				Msg("Successfully flushed points to InfluxDB")
 			return

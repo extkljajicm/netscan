@@ -530,26 +530,27 @@ ping_timeout: "2s"
 
 ```yaml
 # Number of concurrent ICMP ping workers for discovery scans
-# Default: 64
-# Recommended: 2-4x CPU cores
-# Range: 1-256
-icmp_workers: 64
+# Default: 1024 (high-performance servers)
+# Recommended: 2-4x CPU cores for small deployments, higher for large networks
+# Range: 1-2000
+icmp_workers: 1024
 
 # Number of concurrent SNMP polling workers
-# Default: 32
+# Default: 256 (high-performance servers)
 # Recommended: 1-2x CPU cores (SNMP is CPU-intensive due to protocol parsing)
-# Range: 1-128
-snmp_workers: 32
+# Range: 1-1000
+snmp_workers: 256
 ```
 
 **Worker Count Guidelines:**
 
-| System Type      | CPU Cores | ICMP Workers | SNMP Workers | Max Devices |
-|------------------|-----------|--------------|--------------|-------------|
-| Raspberry Pi     | 4         | 8            | 4            | 100         |
-| Home Server      | 4-8       | 16           | 8            | 500         |
-| Workstation      | 8-16      | 32           | 16           | 1000        |
-| Dedicated Server | 16+       | 64           | 32           | 10000       |
+| System Type       | CPU Cores | ICMP Workers | SNMP Workers | Max Devices | Max Pingers |
+|-------------------|-----------|--------------|--------------|-------------|-------------|
+| Raspberry Pi      | 4         | 8            | 4            | 100         | 100         |
+| Home Server       | 4-8       | 16           | 8            | 500         | 500         |
+| Workstation       | 8-16      | 32           | 16           | 1000        | 1000        |
+| Small Server      | 8-16      | 128          | 64           | 5000        | 5000        |
+| Large Server      | 16+       | 1024         | 256          | 20000       | 20000       |
 
 **Notes:**
 * Start conservative and increase based on CPU usage
@@ -585,9 +586,9 @@ influxdb:
   
   # Batch write settings for performance
   # Number of points to accumulate before writing
-  # Default: 100
-  # Range: 10-1000
-  batch_size: 100
+  # Default: 5000 (high-performance deployments)
+  # Range: 10-10000
+  batch_size: 5000
   
   # Maximum time to hold points before flushing
   # Default: "5s"
@@ -599,7 +600,8 @@ influxdb:
 * Batching reduces InfluxDB requests by ~99% for large deployments
 * Larger batch_size reduces request frequency but increases memory usage
 * Shorter flush_interval reduces data lag but increases request frequency
-* Defaults (100 points, 5s) work well for 100-1000 devices
+* Default (5000 points, 5s) optimized for high-performance servers with 10,000+ devices
+* For small deployments (100-1000 devices), consider batch_size: 100
 
 **InfluxDB Schema:**
 * Measurement: `ping` (primary bucket)
@@ -649,14 +651,14 @@ health_report_interval: "10s"
 
 ```yaml
 # Maximum number of concurrent pinger goroutines
-# Default: 1000
+# Default: 20000 (high-performance servers)
 # Prevents goroutine exhaustion
-max_concurrent_pingers: 1000
+max_concurrent_pingers: 20000
 
 # Maximum number of devices to monitor
-# Default: 10000
+# Default: 20000 (high-performance servers)
 # When limit reached, oldest devices (by LastSeen) are evicted (LRU)
-max_devices: 10000
+max_devices: 20000
 
 # Minimum interval between discovery scans (rate limiting)
 # Default: "1m"
@@ -664,15 +666,17 @@ max_devices: 10000
 min_scan_interval: "1m"
 
 # Memory usage warning threshold in MB
-# Default: 512
+# Default: 16384 (16GB, high-performance servers)
 # Logs warning when exceeded, does not stop service
-memory_limit_mb: 512
+memory_limit_mb: 16384
 ```
 
 **Notes:**
 * Resource limits prevent accidental DoS and resource exhaustion
 * Memory baseline: ~50MB + ~1KB per device
 * Adjust limits based on your hardware and network size
+* High-performance defaults support up to 20,000 devices with 16GB RAM
+* For small deployments, consider: max_devices: 1000, max_concurrent_pingers: 1000, memory_limit_mb: 512
 
 ### Complete Example
 
@@ -696,8 +700,8 @@ ping_interval: "2s"
 ping_timeout: "2s"
 
 # Performance
-icmp_workers: 64
-snmp_workers: 32
+icmp_workers: 1024
+snmp_workers: 256
 
 # InfluxDB
 influxdb:
@@ -705,17 +709,17 @@ influxdb:
   token: "${INFLUXDB_TOKEN}"
   org: "${INFLUXDB_ORG}"
   bucket: "netscan"
-  batch_size: 100
+  batch_size: 5000
   flush_interval: "5s"
 
 # Health Check
 health_check_port: 8080
 
 # Resource Limits
-max_concurrent_pingers: 1000
-max_devices: 10000
+max_concurrent_pingers: 20000
+max_devices: 20000
 min_scan_interval: "1m"
-memory_limit_mb: 512
+memory_limit_mb: 16384
 ```
 
 ### Environment Variables Reference

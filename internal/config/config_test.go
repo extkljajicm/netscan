@@ -99,3 +99,54 @@ influxdb:
 		t.Errorf("expected health_report_interval default to be 10s, got %v", cfg.HealthReportInterval)
 	}
 }
+
+func TestLoadConfigPerformanceDefaults(t *testing.T) {
+	f, err := os.CreateTemp("", "config_test_performance_defaults_*.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	configYAML := `icmp_discovery_interval: "5m"
+networks:
+  - "192.168.1.0/30"
+snmp:
+  community: "testcommunity"
+  port: 161
+ping_interval: "10s"
+ping_timeout: "1s"
+influxdb:
+  url: "http://localhost:8086"
+  token: "token"
+  org: "org"
+  bucket: "bucket"
+`
+	if _, err := f.WriteString(configYAML); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(f.Name())
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	
+	// Test new performance defaults
+	if cfg.IcmpWorkers != 1024 {
+		t.Errorf("expected IcmpWorkers default to be 1024, got %d", cfg.IcmpWorkers)
+	}
+	
+	if cfg.MaxConcurrentPingers != 20000 {
+		t.Errorf("expected MaxConcurrentPingers default to be 20000, got %d", cfg.MaxConcurrentPingers)
+	}
+	
+	if cfg.MaxDevices != 20000 {
+		t.Errorf("expected MaxDevices default to be 20000, got %d", cfg.MaxDevices)
+	}
+	
+	if cfg.MemoryLimitMB != 16384 {
+		t.Errorf("expected MemoryLimitMB default to be 16384, got %d", cfg.MemoryLimitMB)
+	}
+	
+	if cfg.InfluxDB.BatchSize != 5000 {
+		t.Errorf("expected InfluxDB.BatchSize default to be 5000, got %d", cfg.InfluxDB.BatchSize)
+	}
+}
+
