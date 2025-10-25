@@ -726,7 +726,8 @@ influxdb:
   * Fields: `hostname` (string), `snmp_description` (string)
 * Measurement: `health_metrics` (health bucket)
   * Tags: none
-  * Fields: `device_count` (int), `active_pingers` (int), `goroutines` (int), `memory_mb` (int), `influxdb_ok` (bool), `influxdb_successful_batches` (uint64), `influxdb_failed_batches` (uint64)
+  * Fields: `device_count` (int), `active_pingers` (int), `goroutines` (int), `memory_mb` (int), `rss_mb` (int), `influxdb_ok` (bool), `influxdb_successful_batches` (uint64), `influxdb_failed_batches` (uint64)
+  * Note: `memory_mb` is Go heap allocation (runtime.MemStats.Alloc), `rss_mb` is OS-level resident set size (Linux /proc/self/status VmRSS)
 
 ### Health Check Endpoint
 

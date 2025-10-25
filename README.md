@@ -362,6 +362,14 @@ curl http://localhost:8080/health/ready
 curl http://localhost:8080/health/live
 ```
 
+The `/health` endpoint returns detailed metrics including:
+- Device count and active pingers
+- Memory usage: `memory_mb` (Go heap) and `rss_mb` (OS-level resident set size)
+- Goroutine count
+- InfluxDB connectivity status and write statistics
+
+Health metrics are automatically persisted to the InfluxDB health bucket at 10-second intervals (configurable via `health_report_interval`).
+
 ### Uninstallation
 
 **Automated:**
