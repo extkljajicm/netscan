@@ -156,7 +156,8 @@ func getRSSMB() uint64 {
 		line := s.Text()
 		if strings.HasPrefix(line, "VmRSS:") {
 			fields := strings.Fields(line)
-			if len(fields) >= 2 {
+			// Expected format: "VmRSS:    3472 kB"
+			if len(fields) >= 3 && fields[2] == "kB" {
 				kb, err := strconv.ParseUint(fields[1], 10, 64)
 				if err == nil {
 					return kb / 1024
@@ -164,5 +165,11 @@ func getRSSMB() uint64 {
 			}
 		}
 	}
+	
+	// Check for scanner errors
+	if err := s.Err(); err != nil {
+		return 0
+	}
+	
 	return 0
 }
