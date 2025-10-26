@@ -347,6 +347,61 @@ docker exec influxdbv2 influx bucket list --org test-org --token netscan-token
 * Both buckets created automatically on first startup
 * Subsequent restarts skip creation if buckets already exist
 
+### Dashboard Provisioning
+
+**Automatic Dashboard Creation:**
+
+The InfluxDB service automatically provisions three dashboards on first startup, making the service observable out-of-the-box. These dashboards are immediately available in the InfluxDB UI at http://localhost:8086 after running `docker compose up`.
+
+**Three Pre-configured Dashboards:**
+
+1. **Netscan Dashboard** (`netscan.json`)
+   - Primary network monitoring dashboard
+   - Real-time device discovery metrics
+   - Ping latency trends and statistics
+   - Device uptime monitoring
+   - Network health overview
+
+2. **InfluxDB Health Dashboard** (`influxdb_health.json`)
+   - Application health monitoring for the netscan service
+   - Active pinger count
+   - Memory usage (heap and RSS)
+   - Goroutine count
+   - InfluxDB write success/failure rates
+   - Device count tracking
+
+3. **InfluxDB 2.0 Operational Monitoring** (`influxdb_operational_monitoring.yml`)
+   - InfluxDB internal operational monitoring
+   - Task execution metrics
+   - Database cardinality tracking
+   - Query performance metrics
+   - System resource utilization
+
+**How It Works:**
+
+The `init-influxdb.sh` script automatically applies all dashboard templates from the `influxdb/templates/` directory during initialization:
+* Templates are mounted read-only at `/templates` inside the container
+* Each template is applied using the `influx apply` command
+* Provisioning happens only on first startup (when database is initialized)
+* Subsequent restarts skip dashboard creation if they already exist
+
+**Accessing the Dashboards:**
+
+1. Navigate to http://localhost:8086 in your browser
+2. Log in with your credentials (default: admin/admin123)
+3. Click on "Dashboards" in the left sidebar
+4. All three dashboards will be available in the list
+
+**Adding Custom Dashboards:**
+
+To add additional dashboards to auto-provisioning:
+1. Export your dashboard from the InfluxDB UI (Settings → Templates → Export)
+2. Save the exported JSON/YAML file to `influxdb/templates/`
+3. Add an `influx apply` command to the `init-influxdb.sh` script
+4. Rebuild and restart: `docker compose down -v && docker compose up -d`
+
+For more details, see `influxdb/templates/README.md`.
+
 ### Common Operations
 
 #### Building and Running with the Latest Code

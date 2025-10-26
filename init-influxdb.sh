@@ -24,3 +24,26 @@ else
     --retention "${DOCKER_INFLUXDB_INIT_RETENTION}"
   echo "Health bucket created successfully"
 fi
+
+# -------------------------------------------------
+# Apply Dashboards
+# -------------------------------------------------
+echo "Applying 'Netscan' dashboard..."
+influx apply \
+  --file /templates/netscan.json \
+  --org "${DOCKER_INFLUXDB_INIT_ORG}" \
+  --token "${DOCKER_INFLUXDB_INIT_ADMIN_TOKEN}"
+
+echo "Applying 'InfluxDB Health' dashboard..."
+influx apply \
+  --file /templates/influxdb_health.json \
+  --org "${DOCKER_INFLUXDB_INIT_ORG}" \
+  --token "${DOCKER_INFLUXDB_INIT_ADMIN_TOKEN}"
+
+echo "Applying 'InfluxDB 2.0 Operational Monitoring' dashboard..."
+influx apply \
+  --file /templates/influxdb_operational_monitoring.yml \
+  --org "${DOCKER_INFLUXDB_INIT_ORG}" \
+  --token "${DOCKER_INFLUXDB_INIT_ADMIN_TOKEN}"
+
+echo "All dashboards applied."
