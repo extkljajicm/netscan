@@ -77,6 +77,9 @@ func main() {
 
 	// Initialize atomic counter for tracking in-flight pings
 	var currentInFlightPings atomic.Int64
+	
+	// Initialize atomic counter for total pings sent (for observability/metrics)
+	var totalPingsSent atomic.Uint64
 
 	// Map IP addresses to their pinger cancellation functions
 	// CRITICAL: Protected by mutex to prevent concurrent map access
@@ -92,11 +95,14 @@ func main() {
 	// Buffer size allows multiple pingers to exit concurrently without blocking
 	pingerExitChan := make(chan string, 100)
 
-	// Start health check endpoint with accurate pinger count
+	// Start health check endpoint with accurate pinger count and total pings sent
 	getPingerCount := func() int {
 		return int(currentInFlightPings.Load())
 	}
-	healthServer := NewHealthServer(cfg.HealthCheckPort, stateMgr, writer, getPingerCount)
+	getPingsSentCount := func() uint64 {
+		return totalPingsSent.Load()
+	}
+	healthServer := NewHealthServer(cfg.HealthCheckPort, stateMgr, writer, getPingerCount, getPingsSentCount)
 	if err := healthServer.Start(); err != nil {
 		log.Warn().Err(err).Msg("Health check server failed to start")
 	}
@@ -397,7 +403,7 @@ func main() {
 						}()
 						
 						// Run the actual pinger
-						monitoring.StartPinger(ctx, &pingerWg, d, cfg.PingInterval, cfg.PingTimeout, writer, stateMgr, pingRateLimiter, &currentInFlightPings, cfg.PingMaxConsecutiveFails, cfg.PingBackoffDuration)
+						monitoring.StartPinger(ctx, &pingerWg, d, cfg.PingInterval, cfg.PingTimeout, writer, stateMgr, pingRateLimiter, &currentInFlightPings, &totalPingsSent, cfg.PingMaxConsecutiveFails, cfg.PingBackoffDuration)
 						
 						// Notify that this pinger has exited
 						select {
@@ -450,6 +456,9 @@ func main() {
 			log.Debug().Msg("Writing health metrics...")
 			metrics := healthServer.GetHealthMetrics()
 			
+			// Load total pings sent counter
+			pingsSent := totalPingsSent.Load()
+			
 			writer.WriteHealthMetrics(
 				metrics.DeviceCount,
 				metrics.ActivePingers,
@@ -460,6 +469,7 @@ func main() {
 				metrics.InfluxDBOK,
 				metrics.InfluxDBSuccessful,
 				metrics.InfluxDBFailed,
+				pingsSent, // total pings sent counter
 			)
 		}
 	}
