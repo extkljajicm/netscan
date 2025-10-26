@@ -25,12 +25,6 @@ else
   echo "Health bucket created successfully"
 fi
 
-# Added delay to prevent race condition where InfluxDB APIs are not fully ready
-# even though 'influx ping' passes. This is especially critical in CI/CD environments
-# where the system is faster. Without this delay, the template application can fail with
-# "Error: aborted application of template" despite the dry run succeeding.
-sleep 5
-
 # -------------------------------------------------
 # Apply Dashboards
 # -------------------------------------------------
@@ -39,10 +33,14 @@ echo "Applying dashboards from /templates..."
 # Apply Netscan dashboard if it exists
 if [ -f /templates/netscan.json ]; then
   echo "Applying 'Netscan' dashboard..."
+  # Note: --force yes is required for non-interactive scripts to skip confirmation prompts.
+  # Without this flag, influx apply will abort with "Error: aborted application of template"
+  # even though the dry run succeeds, because it's waiting for user input.
   influx apply \
     --file /templates/netscan.json \
     --org "${DOCKER_INFLUXDB_INIT_ORG}" \
-    --token "${DOCKER_INFLUXDB_INIT_ADMIN_TOKEN}"
+    --token "${DOCKER_INFLUXDB_INIT_ADMIN_TOKEN}" \
+    --force yes
   echo "Netscan dashboard applied successfully"
 else
   echo "WARNING: netscan.json not found in /templates, skipping..."
@@ -51,10 +49,12 @@ fi
 # Apply InfluxDB Health dashboard if it exists
 if [ -f /templates/influxdb_health.json ]; then
   echo "Applying 'InfluxDB Health' dashboard..."
+  # Note: --force yes is required for non-interactive scripts to skip confirmation prompts.
   influx apply \
     --file /templates/influxdb_health.json \
     --org "${DOCKER_INFLUXDB_INIT_ORG}" \
-    --token "${DOCKER_INFLUXDB_INIT_ADMIN_TOKEN}"
+    --token "${DOCKER_INFLUXDB_INIT_ADMIN_TOKEN}" \
+    --force yes
   echo "InfluxDB Health dashboard applied successfully"
 else
   echo "WARNING: influxdb_health.json not found in /templates, skipping..."
@@ -63,10 +63,12 @@ fi
 # Apply InfluxDB Operational Monitoring dashboard
 if [ -f /templates/influxdb_operational_monitoring.yml ]; then
   echo "Applying 'InfluxDB 2.0 Operational Monitoring' dashboard..."
+  # Note: --force yes is required for non-interactive scripts to skip confirmation prompts.
   influx apply \
     --file /templates/influxdb_operational_monitoring.yml \
     --org "${DOCKER_INFLUXDB_INIT_ORG}" \
-    --token "${DOCKER_INFLUXDB_INIT_ADMIN_TOKEN}"
+    --token "${DOCKER_INFLUXDB_INIT_ADMIN_TOKEN}" \
+    --force yes
   echo "InfluxDB Operational Monitoring dashboard applied successfully"
 else
   echo "WARNING: influxdb_operational_monitoring.yml not found in /templates, skipping..."
