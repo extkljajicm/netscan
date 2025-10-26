@@ -24,3 +24,46 @@ else
     --retention "${DOCKER_INFLUXDB_INIT_RETENTION}"
   echo "Health bucket created successfully"
 fi
+
+# -------------------------------------------------
+# Apply Dashboards
+# -------------------------------------------------
+echo "Applying dashboards from /templates..."
+
+# Apply Netscan dashboard if it exists
+if [ -f /templates/netscan.json ]; then
+  echo "Applying 'Netscan' dashboard..."
+  influx apply \
+    --file /templates/netscan.json \
+    --org "${DOCKER_INFLUXDB_INIT_ORG}" \
+    --token "${DOCKER_INFLUXDB_INIT_ADMIN_TOKEN}"
+  echo "Netscan dashboard applied successfully"
+else
+  echo "WARNING: netscan.json not found in /templates, skipping..."
+fi
+
+# Apply InfluxDB Health dashboard if it exists
+if [ -f /templates/influxdb_health.json ]; then
+  echo "Applying 'InfluxDB Health' dashboard..."
+  influx apply \
+    --file /templates/influxdb_health.json \
+    --org "${DOCKER_INFLUXDB_INIT_ORG}" \
+    --token "${DOCKER_INFLUXDB_INIT_ADMIN_TOKEN}"
+  echo "InfluxDB Health dashboard applied successfully"
+else
+  echo "WARNING: influxdb_health.json not found in /templates, skipping..."
+fi
+
+# Apply InfluxDB Operational Monitoring dashboard
+if [ -f /templates/influxdb_operational_monitoring.yml ]; then
+  echo "Applying 'InfluxDB 2.0 Operational Monitoring' dashboard..."
+  influx apply \
+    --file /templates/influxdb_operational_monitoring.yml \
+    --org "${DOCKER_INFLUXDB_INIT_ORG}" \
+    --token "${DOCKER_INFLUXDB_INIT_ADMIN_TOKEN}"
+  echo "InfluxDB Operational Monitoring dashboard applied successfully"
+else
+  echo "WARNING: influxdb_operational_monitoring.yml not found in /templates, skipping..."
+fi
+
+echo "Dashboard provisioning complete."
