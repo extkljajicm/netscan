@@ -239,6 +239,45 @@ docker compose logs netscan | grep -E "(Ping successful|Ping failed)"
 # {"level":"debug","ip":"192.168.1.1","rtt":12340000,"packets_recv":1,"packets_sent":1,"message":"Ping successful"}
 ```
 
+**Mass "network is unreachable" errors at regular intervals:**
+
+**Symptom:** Logs show recurring mass ping failures with error `"sendmsg: network is unreachable"` at regular intervals (e.g., every 15 minutes), often accompanied by a spike in the `active_pingers` metric.
+
+**Cause:** This is typically caused by **external network events**, NOT an issue with netscan. Common causes include:
+* **ARP cache expiration** (Linux default: 900 seconds = 15 minutes)
+* Router/firewall connection tracking timeouts
+* Network topology changes or routing table updates
+
+**Why the metric spikes:** The behavior occurs in two phases:
+1. **Silent packet loss (Phase 1):** ICMP packets are sent but silently dropped by the network (no echo reply). Pingers wait for the full `ping_timeout` (e.g., 7 seconds), causing `active_pingers` to inflate (Little's Law: 64 pps × 7s = 448 concurrent pings).
+2. **Hard failure (Phase 2):** Once network state fully expires, the kernel rejects packets with `ENETUNREACH` error. These are fast syscall failures (<10ms) that don't inflate the metric.
+
+**Code behavior:** As of the latest version, network unreachable errors are logged as WARN (not ERROR) to reduce noise:
+```bash
+# These are now logged as warnings with diagnostic context:
+{"level":"warn","ip":"192.168.1.1","error":"...network is unreachable","message":"Network routing issue detected (fast syscall failure, check ARP/routing)"}
+```
+
+**Diagnosis:**
+```bash
+# Check ARP cache timeout on the host (likely 900s = 15 minutes)
+docker exec netscan cat /proc/sys/net/ipv4/neigh/default/gc_stale_time
+
+# Monitor ARP cache in real-time
+docker exec netscan watch -n 1 'arp -an'
+
+# Check for the two-phase pattern in logs:
+# 1. Increase in DEBUG "Ping failed - no response" (timeouts)
+# 2. Spike in WARN "Network routing issue detected" (fast failures)
+docker compose logs netscan | grep -E "(Ping failed|Network routing)"
+```
+
+**Solution:**
+* This is **not a bug in netscan** - the application is correctly detecting network issues
+* Work with your network team to identify the external network timer
+* Consider tuning ARP cache timeout if appropriate for your environment
+* Review firewall connection tracking settings for ICMP traffic
+
 ### Log Management
 
 **Docker Log Rotation:**
@@ -573,6 +612,45 @@ ping 192.168.1.1
 # Check logs
 sudo journalctl -u netscan | grep discovery
 ```
+
+**Mass "network is unreachable" errors at regular intervals:**
+
+**Symptom:** Logs show recurring mass ping failures with error `"sendmsg: network is unreachable"` at regular intervals (e.g., every 15 minutes), often accompanied by a spike in the `active_pingers` metric.
+
+**Cause:** This is typically caused by **external network events**, NOT an issue with netscan. Common causes include:
+* **ARP cache expiration** (Linux default: 900 seconds = 15 minutes)
+* Router/firewall connection tracking timeouts
+* Network topology changes or routing table updates
+
+**Why the metric spikes:** The behavior occurs in two phases:
+1. **Silent packet loss (Phase 1):** ICMP packets are sent but silently dropped by the network (no echo reply). Pingers wait for the full `ping_timeout` (e.g., 7 seconds), causing `active_pingers` to inflate (Little's Law: 64 pps × 7s = 448 concurrent pings).
+2. **Hard failure (Phase 2):** Once network state fully expires, the kernel rejects packets with `ENETUNREACH` error. These are fast syscall failures (<10ms) that don't inflate the metric.
+
+**Code behavior:** As of the latest version, network unreachable errors are logged as WARN (not ERROR) to reduce noise:
+```bash
+# These are now logged as warnings with diagnostic context:
+{"level":"warn","ip":"192.168.1.1","error":"...network is unreachable","message":"Network routing issue detected (fast syscall failure, check ARP/routing)"}
+```
+
+**Diagnosis:**
+```bash
+# Check ARP cache timeout on the host (likely 900s = 15 minutes)
+cat /proc/sys/net/ipv4/neigh/default/gc_stale_time
+
+# Monitor ARP cache in real-time
+watch -n 1 'arp -an'
+
+# Check for the two-phase pattern in logs:
+# 1. Increase in DEBUG "Ping failed - no response" (timeouts)
+# 2. Spike in WARN "Network routing issue detected" (fast failures)
+sudo journalctl -u netscan | grep -E "(Ping failed|Network routing)"
+```
+
+**Solution:**
+* This is **not a bug in netscan** - the application is correctly detecting network issues
+* Work with your network team to identify the external network timer
+* Consider tuning ARP cache timeout if appropriate for your environment
+* Review firewall connection tracking settings for ICMP traffic
 
 ---
 
