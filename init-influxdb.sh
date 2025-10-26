@@ -25,6 +25,12 @@ else
   echo "Health bucket created successfully"
 fi
 
+# Added delay to prevent race condition where InfluxDB APIs are not fully ready
+# even though 'influx ping' passes. This is especially critical in CI/CD environments
+# where the system is faster. Without this delay, the template application can fail with
+# "Error: aborted application of template" despite the dry run succeeding.
+sleep 5
+
 # -------------------------------------------------
 # Apply Dashboards
 # -------------------------------------------------

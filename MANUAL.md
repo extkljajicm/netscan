@@ -204,6 +204,37 @@ docker compose logs influxdb | grep -i "health bucket"
 docker exec influxdbv2 influx bucket list --org test-org --token netscan-token
 ```
 
+**InfluxDB container fails/restarts on first run:**
+
+**Symptom:** The InfluxDB container exits with an error during initialization. Logs show `ts=...lvl=info msg="template dry run successful"` followed immediately by `Error: aborted application of template` and `run-parts: /docker-entrypoint-initdb.d/init-influxdb.sh exited with return code 1`.
+
+**Cause:** This is a race condition where InfluxDB's internal APIs for applying templates are not fully initialized even though the `influx ping` check passes. This occurs more frequently in CI/CD environments or on faster systems where the initialization process completes more quickly than the API readiness.
+
+**Fix:** The `init-influxdb.sh` script includes a 5-second delay (`sleep 5`) after bucket creation and before dashboard provisioning to allow InfluxDB APIs to fully initialize. If you still encounter this error:
+
+1. **Increase the delay**: Edit `init-influxdb.sh` and change `sleep 5` to `sleep 10` (or higher)
+2. **Verify the fix is present**: 
+   ```bash
+   grep -A 2 "sleep" init-influxdb.sh
+   # Should show: sleep 5 (or your custom value)
+   ```
+3. **Rebuild and restart**:
+   ```bash
+   docker compose down -v
+   docker compose up -d --build
+   ```
+4. **Monitor logs**:
+   ```bash
+   docker compose logs -f influxdb
+   # Look for successful dashboard application messages
+   ```
+
+**Technical Details:** The error occurs because:
+* The `influx ping` command only checks basic connectivity
+* Dashboard template application requires additional InfluxDB internal services to be ready
+* Fast systems (CI/CD runners) can race through initialization before these services are fully available
+* The delay ensures all APIs are ready before attempting template application
+
 **Pings show success=false despite valid RTT values:**
 
 **Symptom:** InfluxDB queries show `success=false` for ping records that have non-zero `rtt_ms` values (e.g., 12.34ms, 50.1ms). This indicates successful pings are being incorrectly classified as failures.
