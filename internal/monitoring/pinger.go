@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -110,10 +111,20 @@ func performPing(device state.Device, timeout time.Duration, writer PingWriter, 
 	pinger.Timeout = timeout                      // Use configured ping timeout
 	pinger.SetPrivileged(true)                    // Use raw ICMP sockets (requires root)
 	if err := pinger.Run(); err != nil {
-		log.Error().
-			Str("ip", device.IP).
-			Err(err).
-			Msg("Ping execution failed")
+		// Distinguish between network-level errors (fast failure) and other errors
+		// Network unreachable errors indicate routing/ARP issues and are fast failures (<10ms)
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "unreachable") || strings.Contains(errMsg, "network is unreachable") {
+			log.Warn().
+				Str("ip", device.IP).
+				Err(err).
+				Msg("Network routing issue detected (fast syscall failure, check ARP/routing)")
+		} else {
+			log.Error().
+				Str("ip", device.IP).
+				Err(err).
+				Msg("Ping execution failed")
+		}
 		return // Skip execution errors
 	}
 	stats := pinger.Statistics()
@@ -191,10 +202,22 @@ func performPingWithCircuitBreaker(device state.Device, timeout time.Duration, w
 	pinger.Timeout = timeout                      // Use configured ping timeout
 	pinger.SetPrivileged(true)                    // Use raw ICMP sockets (requires root)
 	if err := pinger.Run(); err != nil {
-		log.Error().
-			Str("ip", device.IP).
-			Err(err).
-			Msg("Ping execution failed")
+		// Distinguish between network-level errors (fast failure) and other errors
+		// Network unreachable errors indicate routing/ARP issues and are fast failures (<10ms)
+		// These do NOT inflate active_pingers metric (short duration W in Little's Law)
+		// Common causes: ARP cache expiration, routing table updates, firewall state timeouts
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "unreachable") || strings.Contains(errMsg, "network is unreachable") {
+			log.Warn().
+				Str("ip", device.IP).
+				Err(err).
+				Msg("Network routing issue detected (fast syscall failure, check ARP/routing)")
+		} else {
+			log.Error().
+				Str("ip", device.IP).
+				Err(err).
+				Msg("Ping execution failed")
+		}
 		return // Skip execution errors
 	}
 	stats := pinger.Statistics()
