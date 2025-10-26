@@ -204,6 +204,38 @@ docker compose logs influxdb | grep -i "health bucket"
 docker exec influxdbv2 influx bucket list --org test-org --token netscan-token
 ```
 
+**InfluxDB container fails during dashboard provisioning:**
+
+**Symptom:** The InfluxDB container exits with an error during initialization. Logs show `ts=...lvl=info msg="template dry run successful"` followed immediately by `Error: aborted application of template` and `run-parts: /docker-entrypoint-initdb.d/init-influxdb.sh exited with return code 1`.
+
+**Root Cause:** The `influx apply` command requires user confirmation by default when applying templates. In non-interactive environments (like Docker initialization scripts and CI/CD pipelines), the command waits for stdin input that never comes, causing it to abort. The dry run succeeds because it doesn't require confirmation, but the actual application fails.
+
+**Analysis of the Error:**
+1. **Dry run succeeds** - Proves the template file (netscan.json) is valid, readable, and mounted correctly
+2. **Actual apply fails** - The command is waiting for user confirmation (y/n prompt) but running in a non-interactive script
+3. **Why ping check passes** - The `influx ping` check only verifies HTTP endpoint availability, not interactive capabilities
+
+**Fix:** The `init-influxdb.sh` script now includes the `--force yes` flag on all `influx apply` commands. This flag is explicitly recommended by InfluxDB documentation for non-interactive scripts. The fix has been applied to all three dashboard provisioning commands (netscan.json, influxdb_health.json, influxdb_operational_monitoring.yml).
+
+**Verification:**
+```bash
+# Check that the fix is present (should show --force yes on all apply commands)
+grep -A 5 "influx apply" init-influxdb.sh
+
+# If you need to manually apply templates with the correct flag:
+docker exec influxdbv2 influx apply \
+  --file /templates/netscan.json \
+  --org test-org \
+  --token netscan-token \
+  --force yes
+```
+
+**Technical Details:**
+* The `--force yes` flag skips the interactive confirmation prompt
+* This is the recommended approach per InfluxDB CLI documentation for automation
+* The dry run doesn't require this flag because it never modifies resources
+* All three dashboard templates now apply correctly in CI/CD environments
+
 **Pings show success=false despite valid RTT values:**
 
 **Symptom:** InfluxDB queries show `success=false` for ping records that have non-zero `rtt_ms` values (e.g., 12.34ms, 50.1ms). This indicates successful pings are being incorrectly classified as failures.
