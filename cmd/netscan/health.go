@@ -18,11 +18,12 @@ import (
 
 // HealthServer provides HTTP health check endpoint
 type HealthServer struct {
-	stateMgr        *state.Manager
-	writer          *influx.Writer
-	startTime       time.Time
-	port            int
-	getPingerCount  func() int
+	stateMgr           *state.Manager
+	writer             *influx.Writer
+	startTime          time.Time
+	port               int
+	getPingerCount     func() int
+	getPingsSentCount  func() uint64
 }
 
 // HealthResponse represents the health check JSON response
@@ -36,6 +37,7 @@ type HealthResponse struct {
 	InfluxDBOK         bool      `json:"influxdb_ok"`          // InfluxDB connectivity status
 	InfluxDBSuccessful uint64    `json:"influxdb_successful"`  // Successful batch writes
 	InfluxDBFailed     uint64    `json:"influxdb_failed"`      // Failed batch writes
+	PingsSentTotal     uint64    `json:"pings_sent_total"`     // Total monitoring pings sent
 	Goroutines         int       `json:"goroutines"`           // Current goroutine count
 	MemoryMB           uint64    `json:"memory_mb"`            // Current memory usage in MB (Go heap Alloc)
 	RSSMB              uint64    `json:"rss_mb"`               // OS-level resident set size in MB
@@ -43,13 +45,14 @@ type HealthResponse struct {
 }
 
 // NewHealthServer creates a new health check server
-func NewHealthServer(port int, stateMgr *state.Manager, writer *influx.Writer, getPingerCount func() int) *HealthServer {
+func NewHealthServer(port int, stateMgr *state.Manager, writer *influx.Writer, getPingerCount func() int, getPingsSentCount func() uint64) *HealthServer {
 	return &HealthServer{
-		stateMgr:       stateMgr,
-		writer:         writer,
-		startTime:      time.Now(),
-		port:           port,
-		getPingerCount: getPingerCount,
+		stateMgr:          stateMgr,
+		writer:            writer,
+		startTime:         time.Now(),
+		port:              port,
+		getPingerCount:    getPingerCount,
+		getPingsSentCount: getPingsSentCount,
 	}
 }
 
@@ -117,6 +120,7 @@ func (hs *HealthServer) GetHealthMetrics() HealthResponse {
 		InfluxDBOK:         influxOK,
 		InfluxDBSuccessful: hs.writer.GetSuccessfulBatches(),
 		InfluxDBFailed:     hs.writer.GetFailedBatches(),
+		PingsSentTotal:     hs.getPingsSentCount(), // Total pings sent counter
 		Goroutines:         runtime.NumGoroutine(),
 		MemoryMB:           m.Alloc / 1024 / 1024,
 		RSSMB:              rssMB,

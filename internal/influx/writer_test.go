@@ -46,8 +46,8 @@ func TestWriteHealthMetrics(t *testing.T) {
 	defer w.Close()
 	
 	// Call WriteHealthMetrics with sample data - should not panic
-	// Args: deviceCount, pingerCount, goroutines, memMB, rssMB, suspendedCount, influxOK, influxSuccess, influxFailed
-	w.WriteHealthMetrics(100, 50, 200, 64, 128, 10, true, 1000, 5)
+	// Args: deviceCount, pingerCount, goroutines, memMB, rssMB, suspendedCount, influxOK, influxSuccess, influxFailed, pingsSentTotal
+	w.WriteHealthMetrics(100, 50, 200, 64, 128, 10, true, 1000, 5, 5000)
 	
 	// If we get here without panic, the test passes
 }

@@ -29,7 +29,7 @@ type StateManager interface {
 }
 
 // StartPinger runs continuous ICMP monitoring for a single device
-func StartPinger(ctx context.Context, wg *sync.WaitGroup, device state.Device, interval time.Duration, timeout time.Duration, writer PingWriter, stateMgr StateManager, limiter *rate.Limiter, inFlightCounter *atomic.Int64, maxConsecutiveFails int, backoffDuration time.Duration) {
+func StartPinger(ctx context.Context, wg *sync.WaitGroup, device state.Device, interval time.Duration, timeout time.Duration, writer PingWriter, stateMgr StateManager, limiter *rate.Limiter, inFlightCounter *atomic.Int64, totalPingsSent *atomic.Uint64, maxConsecutiveFails int, backoffDuration time.Duration) {
 	// Panic recovery for pinger goroutine
 	defer func() {
 		if r := recover(); r != nil {
@@ -69,7 +69,7 @@ func StartPinger(ctx context.Context, wg *sync.WaitGroup, device state.Device, i
 			}
 
 			// 3. Perform the ping operation with in-flight tracking and circuit breaker
-			performPingWithCircuitBreaker(device, timeout, writer, stateMgr, inFlightCounter, maxConsecutiveFails, backoffDuration)
+			performPingWithCircuitBreaker(device, timeout, writer, stateMgr, inFlightCounter, totalPingsSent, maxConsecutiveFails, backoffDuration)
 			
 			// 4. Reset timer to schedule next ping after interval
 			// This ensures interval is time BETWEEN pings, not fixed schedule
@@ -155,12 +155,17 @@ func performPing(device state.Device, timeout time.Duration, writer PingWriter, 
 }
 
 // performPingWithCircuitBreaker executes a single ping operation with circuit breaker integration
-func performPingWithCircuitBreaker(device state.Device, timeout time.Duration, writer PingWriter, stateMgr StateManager, inFlightCounter *atomic.Int64, maxConsecutiveFails int, backoffDuration time.Duration) {
+func performPingWithCircuitBreaker(device state.Device, timeout time.Duration, writer PingWriter, stateMgr StateManager, inFlightCounter *atomic.Int64, totalPingsSent *atomic.Uint64, maxConsecutiveFails int, backoffDuration time.Duration) {
 	// Increment in-flight counter
 	if inFlightCounter != nil {
 		inFlightCounter.Add(1)
 		// Ensure counter is decremented when ping operation completes
 		defer inFlightCounter.Add(-1)
+	}
+	
+	// Increment total pings sent counter (for observability)
+	if totalPingsSent != nil {
+		totalPingsSent.Add(1)
 	}
 
 	log.Debug().Str("ip", device.IP).Msg("Pinging device")

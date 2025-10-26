@@ -50,7 +50,7 @@ maxInFlight = current
 }()
 
 // Start pinger
-go StartPinger(ctx, nil, dev, interval, 2*time.Second, writer, stateMgr, limiter, &counter, 10, 5*time.Minute)
+go StartPinger(ctx, nil, dev, interval, 2*time.Second, writer, stateMgr, limiter, &counter, nil, 10, 5*time.Minute)
 
 // Wait for test to complete
 <-ctx.Done()
@@ -110,7 +110,7 @@ ctx, cancel := context.WithTimeout(context.Background(), 2000*time.Millisecond)
 defer cancel()
 
 // Start pinger
-go StartPinger(ctx, nil, dev, interval, 2*time.Second, writer, stateMgr, limiter, &counter, 10, 5*time.Minute)
+go StartPinger(ctx, nil, dev, interval, 2*time.Second, writer, stateMgr, limiter, &counter, nil, 10, 5*time.Minute)
 
 // Wait for test to complete
 <-ctx.Done()
@@ -143,7 +143,7 @@ ctx, cancel := context.WithCancel(context.Background())
 
 done := make(chan bool)
 go func() {
-StartPinger(ctx, nil, dev, 100*time.Millisecond, 2*time.Second, writer, stateMgr, limiter, &counter, 10, 5*time.Minute)
+StartPinger(ctx, nil, dev, 100*time.Millisecond, 2*time.Second, writer, stateMgr, limiter, &counter, nil, 10, 5*time.Minute)
 done <- true
 }()
 
