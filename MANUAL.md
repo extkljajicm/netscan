@@ -839,6 +839,22 @@ health_report_interval: "10s"
 * `influxdb_ok` (bool) - InfluxDB connectivity status
 * `influxdb_successful` (uint64) - Successful batch writes to InfluxDB
 * `influxdb_failed` (uint64) - Failed batch writes to InfluxDB
+* `pings_sent_total` (uint64) - Total number of monitoring pings sent since application startup
+  * **IMPORTANT:** This is a **monotonically increasing counter**, not a rate. It counts **all monitoring pings** sent (successful and failed).
+  * This counter only increments for **continuous monitoring pings** (from active pingers), **NOT** discovery pings.
+  * **Little's Law Relationship:** This metric represents the ping rate (λ) when used with time-series analysis:
+    * `active_pingers` = L (concurrent in-flight pings at any moment)
+    * `pings_sent_total` = cumulative count used to calculate λ (ping rate in pings/second)
+    * Together, these metrics allow you to validate Little's Law: `L = λ × W`
+  * **Calculating Ping Rate in InfluxDB/Grafana:**
+    * To see pings per second, apply the `derivative(1s)` function in InfluxDB queries
+    * In Grafana, use the "Non-negative derivative" transformation with "1s" unit
+    * Example query: `from(bucket: "health") |> range(start: -1h) |> filter(fn: (r) => r._field == "pings_sent_total") |> derivative(unit: 1s, nonNegative: true)`
+  * **Use Cases:**
+    * Verify actual ping rate matches configured `ping_rate_limit`
+    * Detect if rate limiting is working correctly (rate should plateau at limit)
+    * Monitor long-term ping throughput trends
+    * Calculate average network latency using Little's Law: `W = L / λ`
 * `goroutines` (int) - Current goroutine count
 * `memory_mb` (uint64) - Go heap allocation in MB
 * `rss_mb` (uint64) - OS-level resident set size in MB
@@ -846,7 +862,7 @@ health_report_interval: "10s"
 
 **Health Metrics Persistence:**
 * Health metrics are automatically written to the health bucket at the configured interval
-* Metrics include: device count, suspended devices, active pingers, goroutines, memory usage, InfluxDB status
+* Metrics include: device count, suspended devices, active pingers, pings sent total, goroutines, memory usage, InfluxDB status
 * Separate bucket prevents health metrics from mixing with device monitoring data
 * Useful for long-term application health tracking and alerting
 
