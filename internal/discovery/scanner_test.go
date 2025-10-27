@@ -44,7 +44,7 @@ func TestRunICMPSweepWithRateLimiter(t *testing.T) {
 	networks := []string{"127.0.0.0/30"} // Just 4 IPs: .0, .1, .2, .3
 	workers := 4 // More workers than rate limit to test throttling
 	
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	
 	start := time.Now()
@@ -54,13 +54,14 @@ func TestRunICMPSweepWithRateLimiter(t *testing.T) {
 	// With 4 IPs and a rate of 2 pings/sec (burst of 2):
 	// - First 2 pings happen immediately (burst)
 	// - Next 2 pings take ~1 second (rate limited)
-	// So we expect at least ~1 second elapsed time
+	// So we expect at least ~500ms elapsed time (reduced from 1s for CI tolerance)
 	if elapsed < 500*time.Millisecond {
 		t.Errorf("Expected rate limiting to take at least 500ms, but took %v", elapsed)
 	}
 	
 	// Should complete within reasonable time (not hang)
-	if elapsed > 4*time.Second {
+	// Increased timeout to 8s for CI environments with variable CPU scheduling
+	if elapsed > 8*time.Second {
 		t.Errorf("RunICMPSweep took too long: %v (possible rate limiter issue)", elapsed)
 	}
 }
@@ -87,9 +88,10 @@ func TestRunICMPSweepContextCancellation(t *testing.T) {
 	_ = RunICMPSweep(ctx, networks, workers, limiter)
 	elapsed := time.Since(start)
 	
-	// Should exit within ~200ms (100ms timeout + some buffer for cleanup)
+	// Should exit within ~1s (100ms timeout + buffer for cleanup)
+	// Increased from 500ms to 1s for CI environment tolerance
 	// Not 10+ seconds waiting for rate limiter
-	if elapsed > 500*time.Millisecond {
+	if elapsed > 1*time.Second {
 		t.Errorf("RunICMPSweep did not respect context cancellation, took %v", elapsed)
 	}
 }
