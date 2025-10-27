@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"net"
 	"strings"
 	"sync"
@@ -92,7 +93,7 @@ func RunICMPSweep(ctx context.Context, networks []string, workers int, limiter *
 		go worker()
 	}
 
-	// Producer: enqueue all IPs from all CIDR ranges
+	// Producer: collect all IPs, shuffle them, then enqueue in randomized order
 	go func() {
 		// Panic recovery for producer goroutine
 		defer func() {
@@ -103,9 +104,22 @@ func RunICMPSweep(ctx context.Context, networks []string, workers int, limiter *
 			}
 		}()
 
+		// Step 1: Buffer all IPs from all networks into a master list
+		var allIPs []string
 		for _, network := range networks {
-			// Stream IPs directly to jobs channel without intermediate array
-			streamIPsFromCIDR(network, jobs)
+			ips := ipsFromCIDR(network)
+			allIPs = append(allIPs, ips...)
+		}
+
+		// Step 2: Shuffle the master list to randomize scan order
+		// This obscures the sequential scanning pattern across all subnets
+		rand.Shuffle(len(allIPs), func(i, j int) {
+			allIPs[i], allIPs[j] = allIPs[j], allIPs[i]
+		})
+
+		// Step 3: Feed shuffled IPs to jobs channel
+		for _, ip := range allIPs {
+			jobs <- ip
 		}
 		close(jobs)
 	}()
