@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/gosnmp/gosnmp"
 	probing "github.com/prometheus-community/pro-bing"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/time/rate"
 )
 
 // RunScanIPsOnly returns all IP addresses in the specified CIDR range
@@ -21,7 +23,9 @@ func RunScanIPsOnly(cidr string) []string {
 
 // RunICMPSweep performs concurrent ICMP ping sweep across multiple networks
 // Returns only the IP addresses that responded to pings
-func RunICMPSweep(networks []string, workers int) []string {
+// The limiter parameter controls the global rate of ping operations
+// The ctx parameter enables graceful shutdown and rate limiter cancellation
+func RunICMPSweep(ctx context.Context, networks []string, workers int, limiter *rate.Limiter) []string {
 	if workers <= 0 {
 		workers = 64 // Default
 	}
@@ -45,6 +49,18 @@ func RunICMPSweep(networks []string, workers int) []string {
 
 		defer wg.Done()
 		for ip := range jobs {
+			// Acquire token from rate limiter before pinging
+			// This ensures discovery scans respect the global ping rate limit
+			if limiter != nil {
+				if err := limiter.Wait(ctx); err != nil {
+					// Context was cancelled while waiting for token
+					log.Debug().
+						Str("ip", ip).
+						Msg("ICMP discovery cancelled while waiting for rate limit token")
+					return
+				}
+			}
+
 			pinger, err := probing.NewPinger(ip)
 			if err != nil {
 				log.Debug().

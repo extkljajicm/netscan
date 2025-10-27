@@ -157,7 +157,7 @@ func main() {
 	// Run initial ICMP discovery at startup
 	log.Info().Msg("Starting ICMP discovery scan...")
 	log.Info().Strs("networks", cfg.Networks).Msg("Scanning networks")
-	responsiveIPs := discovery.RunICMPSweep(cfg.Networks, cfg.IcmpWorkers)
+	responsiveIPs := discovery.RunICMPSweep(mainCtx, cfg.Networks, cfg.IcmpWorkers, pingRateLimiter)
 	log.Info().Int("devices_found", len(responsiveIPs)).Msg("ICMP discovery completed")
 	
 	for _, ip := range responsiveIPs {
@@ -281,7 +281,7 @@ func main() {
 			checkMemoryUsage()
 			log.Info().Msg("Starting ICMP discovery scan...")
 			log.Info().Strs("networks", cfg.Networks).Msg("Scanning networks")
-			responsiveIPs := discovery.RunICMPSweep(cfg.Networks, cfg.IcmpWorkers)
+			responsiveIPs := discovery.RunICMPSweep(mainCtx, cfg.Networks, cfg.IcmpWorkers, pingRateLimiter)
 			log.Info().Int("devices_found", len(responsiveIPs)).Msg("ICMP discovery completed")
 			
 			for _, ip := range responsiveIPs {

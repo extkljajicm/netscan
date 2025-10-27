@@ -836,9 +836,12 @@ ping_interval: "2s"
 ping_timeout: "3s"
 
 # Global ping rate limiting (token bucket algorithm)
-# Controls the sustained rate of ICMP pings across all devices
+# Controls the sustained rate of ICMP pings across ALL operations:
+#   - Continuous monitoring pingers (per-device health checks)
+#   - ICMP discovery scans (network-wide device discovery)
 # Default: 64.0 pings/sec, burst: 256
 # Prevents network bursts, especially on startup when all pingers fire simultaneously
+# Note: Large networks may take longer to complete discovery scans due to rate limiting
 ping_rate_limit: 64.0    # Tokens per second (sustained ping rate)
 ping_burst_limit: 256    # Token bucket capacity (max burst size)
 
@@ -854,7 +857,14 @@ ping_backoff_duration: "5m"     # Duration to suspend device after max failures
 * ping_interval specifies the minimum time *between* ping operations (timer resets after each ping completes)
 * This adaptive approach prevents "thundering herd" when rate limiter delays accumulate
 * Lower intervals (e.g., "1s") provide more data points but increase CPU/network load
-* ping_rate_limit controls global ping rate across all devices (64.0 = 64 pings/sec sustained)
+* **ping_rate_limit controls global ping rate across ALL ping operations:**
+  * Continuous monitoring pingers (per-device health checks every `ping_interval`)
+  * ICMP discovery scans (network-wide sweeps every `icmp_discovery_interval`)
+  * Both operations share the same token bucket, preventing network overload
+* **Discovery scan performance:** With `ping_rate_limit: 64.0` and a /24 network (254 hosts):
+  * Minimum scan time: ~4 seconds (254 pings ÷ 64 pings/sec)
+  * Actual time may be longer due to continuous monitoring consuming tokens
+  * Increase `ping_rate_limit` if discovery scans are too slow
 * ping_burst_limit allows bursts (e.g., startup) up to this many concurrent pings
 * Recommended: burst_limit >= rate_limit to avoid immediate throttling
 * Example: With 100 devices pinging every 2s, peak load = 50 pings/sec (well under default 64/sec limit)
