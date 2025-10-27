@@ -363,3 +363,287 @@ The `deploy.sh` script generates a systemd service file with the following secur
 - Start: `systemctl start netscan`
 - Status: `systemctl status netscan`
 - Logs: `journalctl -u netscan -f`
+
+---
+
+## Core Components (Features)
+
+### Configuration System (`internal/config/config.go`)
+
+**YAML Configuration Loading:**
+- Configuration loaded from `config.yml` file via `LoadConfig(path string)` function
+- Uses `gopkg.in/yaml.v3` decoder for parsing YAML to Go structs
+- **Environment Variable Expansion:** Applies `os.ExpandEnv()` to sensitive fields after YAML parsing:
+  - `influxdb.url`, `influxdb.token`, `influxdb.org`, `influxdb.bucket`, `influxdb.health_bucket`
+  - `snmp.community`
+- Supports `${VAR}` and `$VAR` syntax for environment variable substitution
+- Duration parsing from string format (e.g., "5m", "1h") to `time.Duration` type
+
+**Validation:**
+- `ValidateConfig(cfg *Config)` performs security and sanity checks
+- Returns `(warning string, error)` tuple - warnings for security concerns, errors for validation failures
+- **Security Validations:**
+  - CIDR network range validation (rejects loopback, multicast, link-local, overly broad ranges)
+  - SNMP community string validation (character restrictions, weak password detection)
+  - InfluxDB URL validation (http/https scheme enforcement, URL format checks)
+  - IP address validation for network ranges
+- **Sanity Checks:**
+  - Worker count limits (ICMP: 1-2000, SNMP: 1-1000)
+  - Interval minimums (discovery: 1min, ping: 1s)
+  - Resource protection limits (max devices: 1-100000, memory: 64-16384 MB)
+  - Time format validation for daily SNMP schedule (HH:MM format)
+
+**Configuration Parameters with Defaults:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| **Main Config** | | | |
+| `discovery_interval` | `time.Duration` | `4h` | Legacy discovery interval (backward compatibility) |
+| `icmp_discovery_interval` | `time.Duration` | (required) | Interval for ICMP network discovery sweeps |
+| `icmp_workers` | `int` | `64` | Number of concurrent ICMP discovery workers |
+| `snmp_workers` | `int` | `32` | Number of concurrent SNMP scan workers |
+| `networks` | `[]string` | (required) | List of CIDR network ranges to scan |
+| `ping_interval` | `time.Duration` | (required) | Interval between continuous pings per device |
+| `ping_timeout` | `time.Duration` | `3s` | Timeout for individual ping operations |
+| `ping_rate_limit` | `float64` | `64.0` | Sustained ping rate in pings per second (token bucket rate) |
+| `ping_burst_limit` | `int` | `256` | Maximum burst ping capacity (token bucket size) |
+| `ping_max_consecutive_fails` | `int` | `10` | Circuit breaker: consecutive failures before suspension |
+| `ping_backoff_duration` | `time.Duration` | `5m` | Circuit breaker: suspension duration after threshold |
+| `snmp_daily_schedule` | `string` | (optional) | Daily SNMP scan time in HH:MM format (e.g., "02:00") |
+| `health_check_port` | `int` | `8080` | HTTP port for health check endpoint |
+| `health_report_interval` | `time.Duration` | `10s` | Interval for writing health metrics to InfluxDB |
+| `max_concurrent_pingers` | `int` | `20000` | Maximum number of concurrent pinger goroutines |
+| `max_devices` | `int` | `20000` | Maximum devices managed by StateManager (LRU eviction) |
+| `min_scan_interval` | `time.Duration` | `1m` | Minimum time between discovery scans |
+| `memory_limit_mb` | `int` | `16384` | Memory limit in MB (warning threshold) |
+| **SNMP Config** | | | |
+| `snmp.community` | `string` | (required) | SNMPv2c community string |
+| `snmp.port` | `int` | (required) | SNMP port (typically 161) |
+| `snmp.timeout` | `time.Duration` | `5s` | SNMP request timeout |
+| `snmp.retries` | `int` | (required) | Number of SNMP retry attempts |
+| **InfluxDB Config** | | | |
+| `influxdb.url` | `string` | (required) | InfluxDB server URL (http:// or https://) |
+| `influxdb.token` | `string` | (required) | InfluxDB authentication token |
+| `influxdb.org` | `string` | (required) | InfluxDB organization name |
+| `influxdb.bucket` | `string` | (required) | Primary bucket for ping/device metrics |
+| `influxdb.health_bucket` | `string` | `"health"` | Bucket for application health metrics |
+| `influxdb.batch_size` | `int` | `5000` | Number of points to batch before writing |
+| `influxdb.flush_interval` | `time.Duration` | `5s` | Maximum time to hold points before flushing |
+
+### State Management (`internal/state/manager.go`)
+
+**Thread-Safe Device Registry:**
+- `Manager` struct provides centralized device state storage
+- **Concurrency Control:** `sync.RWMutex` (`mu` field) protects all map operations
+  - Read operations use `RLock()`/`RUnlock()` for concurrent read access
+  - Write operations use `Lock()`/`Unlock()` for exclusive write access
+- **Device Storage:** `devices map[string]*Device` - maps IP addresses to device pointers
+- **Capacity Management:** `maxDevices int` - enforces device count limit with LRU eviction
+
+**Device Struct:**
+- `IP string` - IPv4 address of the device (map key)
+- `Hostname string` - Device hostname from SNMP or IP address as fallback
+- `SysDescr string` - SNMP sysDescr MIB-II value (system description)
+- `LastSeen time.Time` - Timestamp of last successful ping or discovery
+- `ConsecutiveFails int` - Circuit breaker: counter for consecutive ping failures
+- `SuspendedUntil time.Time` - Circuit breaker: timestamp when suspension expires
+
+**Public Methods:**
+
+- **`NewManager(maxDevices int) *Manager`**
+  - Constructor: Creates new state manager with device capacity limit
+  - Default: 10000 devices if maxDevices <= 0
+  
+- **`Add(device Device)`**
+  - Adds or updates complete device struct
+  - Idempotent: updates existing device if IP already exists
+  - LRU eviction: removes oldest device (by LastSeen) when maxDevices reached
+  
+- **`AddDevice(ip string) bool`**
+  - Adds device by IP only, minimal initialization
+  - Returns `true` if new device, `false` if already exists
+  - Sets Hostname to IP, LastSeen to current time
+  - LRU eviction: same as Add() method
+  
+- **`Get(ip string) (*Device, bool)`**
+  - Retrieves device by IP address
+  - Returns `(device, true)` if found, `(nil, false)` if not found
+  
+- **`GetAll() []Device`**
+  - Returns copy of all devices as slice (value copies, not pointers)
+  - Safe for iteration without holding lock
+  
+- **`GetAllIPs() []string`**
+  - Returns slice of all device IP addresses
+  - Used by reconciliation loop and daily SNMP scan
+  
+- **`UpdateLastSeen(ip string)`**
+  - Updates LastSeen timestamp to current time
+  - Called on successful ping to mark device as alive
+  
+- **`UpdateDeviceSNMP(ip, hostname, sysDescr string)`**
+  - Enriches device with SNMP metadata
+  - Updates Hostname, SysDescr, and LastSeen fields
+  
+- **`PruneStale(olderThan time.Duration) []Device`**
+  - Removes devices not seen within duration (e.g., 24 hours)
+  - Returns slice of removed devices for logging
+  - Alias: `Prune()` - same functionality
+  
+- **`Count() int`**
+  - Returns current number of managed devices
+
+- **`ReportPingSuccess(ip string)`**
+  - Circuit breaker: resets failure counter and clears suspension
+  - Sets ConsecutiveFails to 0, SuspendedUntil to zero time
+  
+- **`ReportPingFail(ip string, maxFails int, backoff time.Duration) bool`**
+  - Circuit breaker: increments failure counter
+  - Returns `true` if device was suspended (threshold reached)
+  - On suspension: resets counter, sets SuspendedUntil to now + backoff
+  
+- **`IsSuspended(ip string) bool`**
+  - Checks if device is currently suspended by circuit breaker
+  - Returns `true` if SuspendedUntil is set and in the future
+  
+- **`GetSuspendedCount() int`**
+  - Returns count of currently suspended devices
+  - Used for health metrics reporting
+
+**LRU Eviction:**
+- Triggered in `Add()` and `AddDevice()` when `len(devices) >= maxDevices`
+- **Eviction Algorithm:**
+  1. Iterate all devices to find oldest LastSeen timestamp
+  2. Delete device with smallest (oldest) LastSeen time
+  3. Add new device to freed slot
+- **Guarantees:** Device count never exceeds maxDevices limit
+- **Trade-off:** O(n) eviction time for simplicity (no heap/priority queue)
+
+### InfluxDB Writer (`internal/influx/writer.go`)
+
+**High-Performance Batch System:**
+- **Architecture:** Channel-based lock-free design with background flusher goroutine
+- **Components:**
+  - `batchChan chan *write.Point` - Buffered channel (capacity: 2x batch size)
+  - `backgroundFlusher()` - Goroutine that accumulates and flushes points
+  - `flushTicker *time.Ticker` - Triggers time-based flushes at `flushInterval`
+- **Batching Logic:**
+  - Accumulates points in local slice until batch size reached OR flush interval elapsed
+  - Size-based flush: immediately when batch reaches `batchSize` points
+  - Time-based flush: every `flushInterval` even if batch incomplete
+  - Non-blocking writes: drops points if channel full (logs warning)
+
+**Dual-Bucket Architecture:**
+- **Primary WriteAPI** (`writeAPI`): Writes ping results and device info to main bucket
+- **Health WriteAPI** (`healthWriteAPI`): Writes application health metrics to separate health bucket
+- **Rationale:** Separates operational metrics from application monitoring data
+- **Error Monitoring:** Each WriteAPI has dedicated error channel monitored by `monitorWriteErrors()` goroutine
+
+**Constructor:**
+- **`NewWriter(url, token, org, bucket, healthBucket string, batchSize int, flushInterval time.Duration) *Writer`**
+  - Creates InfluxDB client with dual WriteAPI instances
+  - Initializes buffered batch channel (capacity: `batchSize * 2`)
+  - Starts background flusher goroutine immediately
+  - Obtains error channels once during initialization (stored for reuse)
+  - Returns Writer with context-based cancellation support
+
+**HealthCheck():**
+- Verifies InfluxDB connectivity using client health API
+- 5-second timeout via context
+- Returns error if health status is not "pass"
+- Called during application startup (fail-fast if InfluxDB unavailable)
+
+**Batching Architecture Details:**
+
+- **`batchChan chan *write.Point`**
+  - Buffered channel for lock-free point submission
+  - Capacity: 2x batch size to prevent blocking during normal operation
+  - Writers use non-blocking send with default case (drops on full)
+
+- **`batchSize int`**
+  - Number of points to accumulate before flushing
+  - Default: 5000 points (configurable via InfluxDB config)
+  - Triggers immediate flush when reached
+
+- **`flushInterval time.Duration`**
+  - Maximum time to hold points before flushing
+  - Default: 5 seconds (configurable via InfluxDB config)
+  - Ensures timely data delivery even with low write rates
+
+- **Background Flusher:**
+  - Single goroutine with panic recovery
+  - Select loop handles: context cancellation, flush timer, new points
+  - Accumulates points in local slice (no mutex needed)
+  - Flushes to InfluxDB via `flushWithRetry()` with exponential backoff
+
+**Graceful Shutdown:**
+- **`Close()` Method:**
+  1. Cancels context - signals background flusher to stop
+  2. Stops flush ticker
+  3. Waits 100ms for background flusher to finish
+  4. Background flusher calls `drainAndFlush()` - empties channel and flushes remaining points
+  5. Flushes both WriteAPI buffers (primary and health)
+  6. Closes InfluxDB client connection
+- **Guarantees:** No data loss on graceful shutdown - all queued points flushed
+
+**Write Methods:**
+
+- **`WritePingResult(ip string, rtt time.Duration, successful bool) error`**
+  - **Measurement:** `"ping"`
+  - **Tags:** `ip` (device IP address)
+  - **Fields:**
+    - `rtt_ms` (float64): Round-trip time in milliseconds
+    - `success` (bool): Ping success/failure status
+  - **Validation:** IP address format, RTT range (0 to 1 minute)
+  - **Batching:** Adds to batch channel via `addToBatch()`
+
+- **`WriteDeviceInfo(ip, hostname, sysDescr string) error`**
+  - **Measurement:** `"device_info"`
+  - **Tags:** `ip` (device IP address)
+  - **Fields:**
+    - `hostname` (string): Device hostname from SNMP
+    - `snmp_description` (string): SNMP sysDescr value
+  - **Validation:** IP address format
+  - **Sanitization:** Applies `sanitizeInfluxString()` to hostname and sysDescr
+  - **Batching:** Adds to batch channel via `addToBatch()`
+
+- **`WriteHealthMetrics(deviceCount, pingerCount, goroutines, memMB, rssMB, suspendedCount int, influxOK bool, influxSuccess, influxFailed, pingsSentTotal uint64)`**
+  - **Measurement:** `"health_metrics"`
+  - **Tags:** None (application-level metrics)
+  - **Fields:**
+    - `device_count` (int): Total devices in StateManager
+    - `active_pingers` (int): Currently running pinger goroutines
+    - `suspended_devices` (int): Devices suspended by circuit breaker
+    - `goroutines` (int): Total Go goroutines
+    - `memory_mb` (int): Heap memory usage in MB
+    - `rss_mb` (int): OS-level resident set size in MB
+    - `influxdb_ok` (bool): InfluxDB connectivity status
+    - `influxdb_successful_batches` (uint64): Cumulative successful batch writes
+    - `influxdb_failed_batches` (uint64): Cumulative failed batch writes
+    - `pings_sent_total` (uint64): Total pings sent since startup
+  - **Write Path:** Bypasses batch channel, writes directly to `healthWriteAPI`
+  - **Rationale:** Health metrics written on fixed interval, no need for batching
+
+**Data Sanitization:**
+- **`sanitizeInfluxString(s, fieldName string) string`**
+  - **Purpose:** Prevents database corruption and injection attacks
+  - **Operations:**
+    - Length limiting: truncates to 500 characters, appends "..."
+    - Control character removal: strips characters < 32 (except tab and newline)
+    - Whitespace trimming: removes leading/trailing spaces
+  - **Applied to:** hostname and sysDescr fields in WriteDeviceInfo()
+  - **Logging:** Could log when string significantly modified (currently unused to avoid noise)
+
+**Metrics Tracking:**
+- `successfulBatches atomic.Uint64` - Counter for successful batch writes
+- `failedBatches atomic.Uint64` - Counter for failed batch writes
+- Atomic operations ensure thread-safe updates from background flusher
+- Exposed via `GetSuccessfulBatches()` and `GetFailedBatches()` for health reporting
+
+**Error Handling:**
+- `monitorWriteErrors()` goroutine continuously monitors error channels
+- Logs errors with bucket context (primary or health)
+- Retry logic in `flushWithRetry()`:
+  - Up to 3 retry attempts with exponential backoff (1s, 2s, 4s)
+  - Increments failed batch counter on final failure
+  - Increments successful batch counter on success
