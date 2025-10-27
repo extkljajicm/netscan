@@ -95,6 +95,23 @@ The `.env` file is automatically loaded by Docker Compose. Variables are expande
 - InfluxDB Admin: `admin` / `admin123`
 - SNMP Community: `public`
 
+> **⚠️ CRITICAL: Changing Credentials After First Deployment**
+>
+> InfluxDB only reads the `DOCKER_INFLUXDB_INIT_*` environment variables during **initial setup** when the `influxdbv2-data` volume is empty. Once InfluxDB has been initialized, these variables are **ignored** on subsequent starts because the database already exists.
+>
+> **If you need to change InfluxDB credentials after the first deployment:**
+> 1. **Stop and destroy the database volume** (this will **permanently delete all monitoring data**):
+>    ```bash
+>    docker compose down -v
+>    ```
+> 2. Update your `.env` file with new credentials
+> 3. Start the stack again (InfluxDB will re-initialize with new credentials):
+>    ```bash
+>    docker compose up -d
+>    ```
+>
+> **Alternative (preserving data):** Instead of destroying the volume, you can change credentials directly in the InfluxDB UI (http://localhost:8086) and then update the `.env` file to match. However, this is more complex and error-prone. For testing environments, using `docker compose down -v` is simpler.
+
 #### 4. Start the Stack
 
 ```bash
@@ -264,7 +281,30 @@ depends_on:
 1. Check InfluxDB is healthy: `docker compose ps` (should show "healthy")
 2. Check InfluxDB logs: `docker compose logs influxdb`
 3. Verify token in `.env` matches between `INFLUXDB_TOKEN` and `DOCKER_INFLUXDB_INIT_ADMIN_TOKEN`
-4. If token changed, recreate containers: `docker compose down -v && docker compose up -d`
+4. **If credentials were changed after initial deployment:** You must destroy and recreate the database volume because InfluxDB only initializes credentials on first run. Run:
+   ```bash
+   docker compose down -v && docker compose up -d
+   ```
+   **Warning:** This will permanently delete all existing monitoring data.
+
+#### Issue: Changed `.env` credentials but InfluxDB still uses old password
+
+**Cause:** InfluxDB persistent volume already exists with old credentials. InfluxDB only runs its initialization script (using `DOCKER_INFLUXDB_INIT_*` variables) on the **first run** when the `influxdbv2-data` volume is empty.
+
+**Solution:**
+To apply new credentials from your `.env` file, you must destroy the existing database volume and force InfluxDB to re-initialize:
+
+```bash
+# Stop services and destroy database volume (DELETES ALL DATA)
+docker compose down -v
+
+# Start services with new credentials
+docker compose up -d
+```
+
+**⚠️ Warning:** The `-v` flag permanently deletes the `influxdbv2-data` volume containing all historical monitoring data. Only use this if you need to reset credentials or start fresh.
+
+**Alternative (preserving data):** Change credentials directly in the InfluxDB UI at http://localhost:8086, then update your `.env` file to match the new credentials.
 
 #### Issue: Health check endpoint returns 503 "NOT READY"
 
