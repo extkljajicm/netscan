@@ -1745,3 +1745,449 @@ Reviewers should verify:
 **End of Part II: Development Guide**
 
 *Part III (Reference Documentation) will be added in the next update.*
+
+---
+
+# Part III: Reference Documentation
+
+## 1. Configuration Reference
+
+This section provides a complete reference for all configuration parameters in `config.yml`.
+
+### Configuration File Format
+
+netscan uses YAML format for configuration. The configuration file supports:
+- Duration strings (e.g., `"5m"`, `"30s"`, `"1h30m"`)
+- Environment variable expansion using `${VAR_NAME}` syntax
+- Sensible defaults for most parameters
+
+### Environment Variable Expansion
+
+Configuration values can reference environment variables using the syntax `${VAR_NAME}` or `$VAR_NAME`. This is particularly useful for sensitive credentials that shouldn't be hardcoded.
+
+**Supported in:**
+- `influxdb.url`
+- `influxdb.token`
+- `influxdb.org`
+- `influxdb.bucket`
+- `influxdb.health_bucket`
+- `snmp.community`
+
+**Example:**
+```yaml
+influxdb:
+  token: "${INFLUXDB_TOKEN}"  # Expanded from environment variable
+  org: "${INFLUXDB_ORG}"
+  
+snmp:
+  community: "${SNMP_COMMUNITY}"
+```
+
+**Setting environment variables:**
+
+Docker Compose (via `.env` file):
+```bash
+INFLUXDB_TOKEN=my-secret-token
+INFLUXDB_ORG=my-org
+SNMP_COMMUNITY=private-community
+```
+
+Native systemd (via `/opt/netscan/.env`):
+```bash
+export INFLUXDB_TOKEN=my-secret-token
+export INFLUXDB_ORG=my-org
+export SNMP_COMMUNITY=private-community
+```
+
+### Complete Parameter Reference
+
+#### Network Discovery Settings
+
+| Parameter | Type | Default | Required | Description |
+|-----------|------|---------|----------|-------------|
+| `networks` | `[]string` | *(none)* | **Yes** | List of CIDR network ranges to scan for devices (e.g., `["192.168.1.0/24", "10.0.0.0/24"]`). **Critical:** Must match your actual network or netscan will find 0 devices. |
+| `icmp_discovery_interval` | `duration` | *(none)* | **Yes** | How often to run ICMP discovery sweeps to find new devices (e.g., `"5m"` for 5 minutes). Minimum: 1 minute. |
+| `snmp_daily_schedule` | `string` | `""` (disabled) | No | Daily SNMP scan time in HH:MM format (24-hour time). Leave empty to disable scheduled scans. Example: `"02:00"` runs at 2 AM daily. |
+
+#### SNMP Settings
+
+| Parameter | Type | Default | Required | Description |
+|-----------|------|---------|----------|-------------|
+| `snmp.community` | `string` | *(none)* | **Yes** | SNMPv2c community string for device authentication. Supports environment variable expansion. Default in docker-compose: `"public"`. **Production:** Change to secure value. |
+| `snmp.port` | `int` | *(none)* | **Yes** | SNMP port number. Standard: `161`. |
+| `snmp.timeout` | `duration` | `"5s"` | No | Timeout for individual SNMP requests. |
+| `snmp.retries` | `int` | *(none)* | **Yes** | Number of retry attempts for failed SNMP requests. Recommended: `1` to `3`. |
+
+#### Monitoring Settings
+
+| Parameter | Type | Default | Required | Description |
+|-----------|------|---------|----------|-------------|
+| `ping_interval` | `duration` | *(none)* | **Yes** | Time between continuous pings for each monitored device (e.g., `"2s"`). Minimum: 1 second. Lower values increase network traffic and CPU usage. |
+| `ping_timeout` | `duration` | `"3s"` | No | Maximum time to wait for ICMP echo reply. Should be less than `ping_interval`. |
+| `ping_rate_limit` | `float64` | `64.0` | No | Sustained ping rate in pings per second across all devices (token bucket rate). Controls global ping rate to prevent network flooding. |
+| `ping_burst_limit` | `int` | `256` | No | Maximum burst ping capacity (token bucket size). Allows short bursts above sustained rate. |
+
+#### Circuit Breaker Settings
+
+The circuit breaker automatically suspends devices that fail ping checks consecutively to prevent wasting resources.
+
+| Parameter | Type | Default | Required | Description |
+|-----------|------|---------|----------|-------------|
+| `ping_max_consecutive_fails` | `int` | `10` | No | Number of consecutive ping failures before device is suspended. Range: 1-100. |
+| `ping_backoff_duration` | `duration` | `"5m"` | No | How long to suspend device after reaching max failures. Device will be retried after this duration. |
+
+**Example circuit breaker behavior:**
+- Device fails ping 10 times consecutively
+- Device suspended for 5 minutes
+- During suspension, pings are skipped (saves resources)
+- After 5 minutes, device is retried
+- If successful, failure counter resets
+- If it fails again, cycle repeats
+
+#### Performance Tuning Settings
+
+| Parameter | Type | Default | Required | Description |
+|-----------|------|---------|----------|-------------|
+| `icmp_workers` | `int` | `64` | No | Number of concurrent goroutines for ICMP discovery sweeps. **Tuning:** Small networks (<500 devices): 64; Medium (500-2000): 128; Large (2000+): 256. **Warning:** Values >256 may cause kernel socket buffer overflow. |
+| `snmp_workers` | `int` | `32` | No | Number of concurrent goroutines for SNMP polling. **Recommended:** 25-50% of `icmp_workers` to avoid overwhelming SNMP agents. |
+
+#### InfluxDB Settings
+
+| Parameter | Type | Default | Required | Description |
+|-----------|------|---------|----------|-------------|
+| `influxdb.url` | `string` | *(none)* | **Yes** | InfluxDB server URL. Must use `http://` or `https://` scheme. Example: `"http://localhost:8086"`. Supports environment variable expansion. |
+| `influxdb.token` | `string` | *(none)* | **Yes** | InfluxDB authentication token. **Security:** Use environment variable expansion: `"${INFLUXDB_TOKEN}"`. Never hardcode tokens. |
+| `influxdb.org` | `string` | *(none)* | **Yes** | InfluxDB organization name. Supports environment variable expansion. |
+| `influxdb.bucket` | `string` | *(none)* | **Yes** | Primary bucket for ping results and device info metrics. |
+| `influxdb.health_bucket` | `string` | `"health"` | No | Bucket for application health metrics (device count, memory usage, etc.). |
+| `influxdb.batch_size` | `int` | `5000` | No | Number of data points to accumulate before writing to InfluxDB. Higher values reduce write frequency but increase memory usage. Range: 100-10000. |
+| `influxdb.flush_interval` | `duration` | `"5s"` | No | Maximum time to hold points before flushing to InfluxDB, even if batch not full. Ensures timely data delivery. |
+
+#### Health Check Settings
+
+| Parameter | Type | Default | Required | Description |
+|-----------|------|---------|----------|-------------|
+| `health_check_port` | `int` | `8080` | No | HTTP port for health check endpoints. Provides `/health`, `/health/ready`, and `/health/live` endpoints for monitoring and container orchestration. |
+| `health_report_interval` | `duration` | `"10s"` | No | How often to write application health metrics to InfluxDB health bucket. |
+
+#### Resource Protection Settings
+
+These limits prevent resource exhaustion and DoS attacks.
+
+| Parameter | Type | Default | Required | Description |
+|-----------|------|---------|----------|-------------|
+| `max_concurrent_pingers` | `int` | `20000` | No | Maximum number of concurrent pinger goroutines. Each monitored device has one pinger. Prevents goroutine exhaustion. |
+| `max_devices` | `int` | `20000` | No | Maximum devices managed by StateManager. When limit reached, oldest devices (by LastSeen) are evicted (LRU). |
+| `min_scan_interval` | `duration` | `"1m"` | No | Minimum time between ICMP discovery scans. Prevents scan storms. |
+| `memory_limit_mb` | `int` | `16384` | No | Memory usage warning threshold in MB. Logs warning when exceeded but doesn't stop operation. Used for monitoring and capacity planning. |
+
+#### Legacy/Deprecated Parameters
+
+| Parameter | Type | Default | Required | Description |
+|-----------|------|---------|----------|-------------|
+| `discovery_interval` | `duration` | `"4h"` | No | **Deprecated.** Legacy discovery interval for backward compatibility. Use `icmp_discovery_interval` instead. Will be removed in future version. |
+
+### Configuration Examples
+
+#### Minimal Configuration (Development)
+
+```yaml
+networks:
+  - "127.0.0.1/32"  # Localhost only
+
+icmp_discovery_interval: "1m"
+ping_interval: "5s"
+
+snmp:
+  community: "public"
+  port: 161
+  timeout: "5s"
+  retries: 1
+
+influxdb:
+  url: "http://localhost:8086"
+  token: "test-token"
+  org: "test-org"
+  bucket: "netscan"
+```
+
+#### Production Configuration (Small Network)
+
+```yaml
+networks:
+  - "192.168.1.0/24"
+  - "192.168.2.0/24"
+
+icmp_discovery_interval: "5m"
+snmp_daily_schedule: "02:00"
+
+snmp:
+  community: "${SNMP_COMMUNITY}"  # From environment
+  port: 161
+  timeout: "5s"
+  retries: 2
+
+ping_interval: "2s"
+ping_timeout: "3s"
+ping_rate_limit: 100.0
+ping_burst_limit: 500
+
+# Circuit breaker for unreliable devices
+ping_max_consecutive_fails: 10
+ping_backoff_duration: "5m"
+
+icmp_workers: 64
+snmp_workers: 32
+
+influxdb:
+  url: "http://influxdb.internal:8086"
+  token: "${INFLUXDB_TOKEN}"  # From environment
+  org: "${INFLUXDB_ORG}"
+  bucket: "netscan"
+  health_bucket: "health"
+  batch_size: 5000
+  flush_interval: "5s"
+
+health_check_port: 8080
+health_report_interval: "10s"
+
+max_concurrent_pingers: 5000
+max_devices: 5000
+memory_limit_mb: 4096
+```
+
+#### Production Configuration (Large Network)
+
+```yaml
+networks:
+  - "10.0.0.0/16"     # Large corporate network
+  - "172.16.0.0/16"   # Data center
+
+icmp_discovery_interval: "10m"  # Slower discovery for large network
+snmp_daily_schedule: "03:00"
+
+snmp:
+  community: "${SNMP_COMMUNITY}"
+  port: 161
+  timeout: "10s"  # Longer timeout for slow devices
+  retries: 3
+
+ping_interval: "5s"  # Longer interval to reduce load
+ping_timeout: "4s"
+ping_rate_limit: 500.0  # Higher rate for many devices
+ping_burst_limit: 2000
+
+ping_max_consecutive_fails: 20  # More tolerant
+ping_backoff_duration: "10m"    # Longer backoff
+
+icmp_workers: 256  # Maximum recommended
+snmp_workers: 128  # 50% of icmp_workers
+
+influxdb:
+  url: "https://influxdb-cluster.internal:8086"
+  token: "${INFLUXDB_TOKEN}"
+  org: "${INFLUXDB_ORG}"
+  bucket: "netscan-prod"
+  health_bucket: "health-prod"
+  batch_size: 10000  # Larger batches for efficiency
+  flush_interval: "10s"
+
+health_check_port: 8080
+health_report_interval: "30s"  # Less frequent for large scale
+
+max_concurrent_pingers: 100000  # Support many devices
+max_devices: 100000
+memory_limit_mb: 32768  # 32GB for large deployments
+```
+
+---
+
+## 2. InfluxDB Schema Reference
+
+netscan writes data to InfluxDB v2 using three distinct measurements. Understanding the schema is essential for creating custom queries and dashboards.
+
+### Measurement: `ping`
+
+Stores ICMP ping results for continuous uptime monitoring.
+
+**Bucket:** Primary bucket (configured via `influxdb.bucket`)
+
+**Frequency:** Written every `ping_interval` per device (e.g., every 2 seconds per device)
+
+**Tags:**
+| Tag | Type | Description | Example |
+|-----|------|-------------|---------|
+| `ip` | string | IPv4 address of the monitored device | `"192.168.1.100"` |
+
+**Fields:**
+| Field | Type | Unit | Description | Example |
+|-------|------|------|-------------|---------|
+| `rtt_ms` | float64 | milliseconds | Round-trip time for successful pings. `0.0` for failed pings. | `12.5` |
+| `success` | bool | n/a | Ping success status. `true` if device responded, `false` if timeout. | `true` |
+
+**Timestamp:** Time when ping was executed (not when response received)
+
+**Example Data Point:**
+```
+ping,ip=192.168.1.100 rtt_ms=12.5,success=true 1698765432000000000
+```
+
+**Sample Flux Query (Last 24h ping success rate by device):**
+```flux
+from(bucket: "netscan")
+  |> range(start: -24h)
+  |> filter(fn: (r) => r._measurement == "ping")
+  |> filter(fn: (r) => r._field == "success")
+  |> group(columns: ["ip"])
+  |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
+```
+
+### Measurement: `device_info`
+
+Stores device metadata collected via SNMP.
+
+**Bucket:** Primary bucket (configured via `influxdb.bucket`)
+
+**Frequency:** 
+- Written immediately when device first discovered
+- Re-written during daily SNMP scan (if configured)
+- Re-written when SNMP data changes
+
+**Tags:**
+| Tag | Type | Description | Example |
+|-----|------|-------------|---------|
+| `ip` | string | IPv4 address of the device | `"192.168.1.100"` |
+
+**Fields:**
+| Field | Type | Description | Example |
+|-------|------|-------------|---------|
+| `hostname` | string | Device hostname from SNMP sysName (.1.3.6.1.2.1.1.5.0) or IP address if SNMP fails. Sanitized to max 500 chars, control characters removed. | `"switch-office-1"` |
+| `snmp_description` | string | Device system description from SNMP sysDescr (.1.3.6.1.2.1.1.1.0). Sanitized to max 500 chars, control characters removed. | `"Cisco IOS Software, C2960 Software"` |
+
+**Timestamp:** Time when SNMP scan completed
+
+**Example Data Point:**
+```
+device_info,ip=192.168.1.100 hostname="switch-office-1",snmp_description="Cisco IOS Software" 1698765432000000000
+```
+
+**Sample Flux Query (Get latest device info for all devices):**
+```flux
+from(bucket: "netscan")
+  |> range(start: -7d)
+  |> filter(fn: (r) => r._measurement == "device_info")
+  |> group(columns: ["ip"])
+  |> last()
+  |> pivot(rowKey: ["ip"], columnKey: ["_field"], valueColumn: "_value")
+```
+
+### Measurement: `health_metrics`
+
+Stores application health and observability metrics.
+
+**Bucket:** Health bucket (configured via `influxdb.health_bucket`, default: `"health"`)
+
+**Frequency:** Written every `health_report_interval` (default: 10 seconds)
+
+**Tags:** None (application-level metrics, not device-specific)
+
+**Fields:**
+| Field | Type | Unit | Description |
+|-------|------|------|-------------|
+| `device_count` | int | count | Total number of devices currently managed by StateManager |
+| `active_pingers` | int | count | Number of pinger goroutines currently running (one per monitored device) |
+| `suspended_devices` | int | count | Number of devices currently suspended by circuit breaker |
+| `goroutines` | int | count | Total Go goroutines in the application (for debugging goroutine leaks) |
+| `memory_mb` | int | MB | Go heap memory usage (runtime.MemStats.Alloc) |
+| `rss_mb` | int | MB | OS-level resident set size (from `/proc/self/status` VmRSS on Linux) |
+| `influxdb_ok` | bool | n/a | InfluxDB connectivity status (`true` if healthy, `false` if down) |
+| `influxdb_successful_batches` | uint64 | count | Cumulative count of successful batch writes to InfluxDB since startup |
+| `influxdb_failed_batches` | uint64 | count | Cumulative count of failed batch writes to InfluxDB since startup |
+| `pings_sent_total` | uint64 | count | Total monitoring pings sent since application startup |
+
+**Timestamp:** Time when metrics collected
+
+**Example Data Point:**
+```
+health_metrics device_count=150i,active_pingers=150i,suspended_devices=5i,goroutines=325i,memory_mb=245i,rss_mb=512i,influxdb_ok=true,influxdb_successful_batches=1234u,influxdb_failed_batches=0u,pings_sent_total=456789u 1698765432000000000
+```
+
+**Sample Flux Query (Monitor application health over time):**
+```flux
+from(bucket: "health")
+  |> range(start: -1h)
+  |> filter(fn: (r) => r._measurement == "health_metrics")
+  |> filter(fn: (r) => r._field == "device_count" or r._field == "active_pingers" or r._field == "memory_mb")
+  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)
+```
+
+**Memory Metrics Explained:**
+
+- **`memory_mb`** (Go Heap): Memory allocated by Go runtime for heap objects. Only includes Go-managed memory. Does not include stack memory, OS-level overhead, or memory-mapped files.
+
+- **`rss_mb`** (Resident Set Size): Total physical memory used by the process from the OS perspective. Includes Go heap, stacks, memory-mapped files, shared libraries, and OS overhead. More accurate reflection of actual memory consumption. Linux-specific (reads `/proc/self/status`).
+
+### Data Retention Recommendations
+
+**Primary Bucket (ping + device_info):**
+- **Short-term monitoring (7-30 days):** Raw data at full resolution
+- **Long-term trends (6-12 months):** Downsampled to hourly or daily aggregates
+
+**Health Bucket (health_metrics):**
+- **Short-term (7-14 days):** Raw data at 10-second resolution
+- **Long-term (90 days):** Downsampled to 1-minute or 5-minute resolution
+
+**Example InfluxDB Retention Policies:**
+
+```bash
+# Primary bucket: 30 days retention
+influx bucket create \
+  -n netscan \
+  -o my-org \
+  -r 30d
+
+# Health bucket: 14 days retention
+influx bucket create \
+  -n health \
+  -o my-org \
+  -r 14d
+```
+
+### Common Queries
+
+**Get devices that are currently down:**
+```flux
+from(bucket: "netscan")
+  |> range(start: -5m)
+  |> filter(fn: (r) => r._measurement == "ping")
+  |> filter(fn: (r) => r._field == "success")
+  |> filter(fn: (r) => r._value == false)
+  |> group(columns: ["ip"])
+  |> last()
+```
+
+**Calculate average RTT per device over last hour:**
+```flux
+from(bucket: "netscan")
+  |> range(start: -1h)
+  |> filter(fn: (r) => r._measurement == "ping")
+  |> filter(fn: (r) => r._field == "rtt_ms")
+  |> filter(fn: (r) => r._value > 0.0)  // Only successful pings
+  |> group(columns: ["ip"])
+  |> mean()
+```
+
+**Monitor application resource usage:**
+```flux
+from(bucket: "health")
+  |> range(start: -24h)
+  |> filter(fn: (r) => r._measurement == "health_metrics")
+  |> filter(fn: (r) => r._field == "memory_mb" or r._field == "rss_mb" or r._field == "goroutines")
+  |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)
+```
+
+---
+
+**End of Part III: Configuration Reference and InfluxDB Schema**
+
+*Part IV (Health API, File Structure, Code API) will be added in the final update.*
