@@ -25,14 +25,17 @@ The application uses five independent, concurrent tickers orchestrated in `cmd/n
 1. **ICMP Discovery Ticker** (`icmpDiscoveryTicker`)
    - **Interval:** Configurable via `cfg.IcmpDiscoveryInterval`
    - **Purpose:** Periodically scans configured network ranges to discover responsive devices
+   - **Scanning Pattern:** IP addresses are scanned in randomized order to obscure the sequential scanning pattern
    - **Operation:** 
      - Calls `discovery.RunICMPSweep()` with context, networks, worker count, and rate limiter
+     - RunICMPSweep buffers all IPs from all networks, shuffles them using `math/rand.Shuffle`, then scans in randomized order
      - Returns list of IPs that responded to ICMP echo requests
      - For each responsive IP, calls `stateMgr.AddDevice(ip)` to add to state
      - If device is new (`isNew == true`), launches background goroutine to perform immediate SNMP scan
      - SNMP results are written to StateManager and InfluxDB via `writer.WriteDeviceInfo()`
    - **Concurrency:** SNMP scans run in background goroutines with panic recovery to avoid blocking the discovery loop
    - **Memory Check:** Calls `checkMemoryUsage()` before each scan to warn if memory exceeds configured limit
+   - **Memory Trade-off:** All IPs are buffered in memory before shuffling (acceptable given /16 per-network safety limit and high default memory limit of 16384 MB)
 
 2. **Daily SNMP Scan Ticker** (`dailySNMPChan`)
    - **Schedule:** Configurable via `cfg.SNMPDailySchedule` in HH:MM format (e.g., "02:00")
@@ -672,18 +675,28 @@ func RunICMPSweep(ctx context.Context, networks []string, workers int, limiter *
   - Creates pinger with `probing.NewPinger(ip)`
   - Sends single ICMP echo request (1 second timeout)
   - Sends responsive IP to `results` channel if `stats.PacketsRecv > 0`
-- Producer goroutine streams IPs from all networks to `jobs` channel, then closes it
+- Producer goroutine buffers all IPs from all networks, shuffles them using `math/rand.Shuffle`, then sends to `jobs` channel in randomized order
 - Wait goroutine waits for all workers via `WaitGroup`, then closes `results` channel
 - Main function collects all responsive IPs from `results` channel and returns slice
 
+**Randomization:**
+- All IPs from all configured networks are first collected into a master slice using `ipsFromCIDR()`
+- The master slice is shuffled using `rand.Shuffle()` to randomize scan order across all subnets
+- This obscures the sequential scanning pattern (e.g., 192.168.1.1, 192.168.1.2, 192.168.1.3...)
+- Memory trade-off: All IPs buffered in memory (acceptable given /16 per-network limit and 16GB default memory limit)
+
 **Implementation Details:**
-- **`streamIPsFromCIDR(network string, ipChan chan<- string)`**:
-  - Streams IP addresses from CIDR notation directly to channel
-  - Avoids allocating memory for all IPs at once (memory-efficient for large networks)
+- **`ipsFromCIDR(network string) []string`**:
+  - Expands CIDR notation into individual IP addresses as slice
+  - Used by producer to build master IP list for shuffling
   - Parses CIDR with `net.ParseCIDR()`
   - Iterates through subnet using `incIP()` helper function
+  - Safety limit: max 65,536 IPs per network (networks larger than /16 return empty slice)
+- **`streamIPsFromCIDR(network string, ipChan chan<- string)`**:
+  - Legacy function that streams IPs sequentially to channel (used by other discovery functions)
+  - Not used by RunICMPSweep (which uses ipsFromCIDR for randomization)
+  - Avoids allocating memory for all IPs at once (memory-efficient for large networks)
   - Logs warning for networks larger than /16 (65K hosts)
-  - Safety limit: max 65,536 IPs per network
 - **`SetPrivileged(true)`**:
   - Configures pinger to use raw ICMP sockets
   - Requires CAP_NET_RAW capability or root privileges

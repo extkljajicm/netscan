@@ -15,7 +15,7 @@ This manual provides comprehensive documentation for netscan, a production-grade
 
 netscan is a production-grade Go network monitoring service that performs automated network device discovery and continuous uptime monitoring. The service operates through a multi-ticker event-driven architecture with five independent monitoring workflows:
 
-1. **ICMP Discovery** - Periodic network sweeps to find responsive devices
+1. **ICMP Discovery** - Periodic network sweeps to find responsive devices (uses randomized scanning order)
 2. **SNMP Enrichment** - Scheduled metadata collection from discovered devices
 3. **Continuous Monitoring** - Per-device ICMP ping monitoring with rate limiting
 4. **Pinger Reconciliation** - Automatic lifecycle management of monitoring goroutines
@@ -1846,7 +1846,7 @@ export SNMP_COMMUNITY=private-community
 | Parameter | Type | Default | Required | Description |
 |-----------|------|---------|----------|-------------|
 | `networks` | `[]string` | *(none)* | **Yes** | List of CIDR network ranges to scan for devices (e.g., `["192.168.1.0/24", "10.0.0.0/24"]`). **Critical:** Must match your actual network or netscan will find 0 devices. |
-| `icmp_discovery_interval` | `duration` | *(none)* | **Yes** | How often to run ICMP discovery sweeps to find new devices (e.g., `"5m"` for 5 minutes). Minimum: 1 minute. |
+| `icmp_discovery_interval` | `duration` | *(none)* | **Yes** | How often to run ICMP discovery sweeps to find new devices (e.g., `"5m"` for 5 minutes). Minimum: 1 minute. **Note:** IP addresses are scanned in randomized order to obscure the scanning pattern. |
 | `snmp_daily_schedule` | `string` | `""` (disabled) | No | Daily SNMP scan time in HH:MM format (24-hour time). Leave empty to disable scheduled scans. Example: `"02:00"` runs at 2 AM daily. |
 
 #### SNMP Settings
