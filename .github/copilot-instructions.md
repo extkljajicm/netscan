@@ -1,4 +1,12 @@
-# GitHub Copilot Instructions for Project: netscan
+# netscan: Project Bible & AI Development Guide
+
+**Welcome!** This document serves two purposes:
+1.  **It is the Project's Single Source of Truth (SSOT).** It contains the complete architecture, deployment model, and component details, all derived directly from the source code.
+2.  **It is the Instruction Manual for the AI Agent.** It contains the strict rules, mandates, and non-goals for all future development.
+
+All developers (human and AI) must adhere to the principles and mandates in this guide.
+
+---
 
 ## Project Overview
 
@@ -900,6 +908,15 @@ To keep the project focused, we explicitly **do not** do the following. Do not s
 
 ## Core Principles & Mandates (Read Before Coding)
 
+**Top 5 Rules:** Before any code is written, you MUST confirm:
+1.  **Scope:** Does this change respect the `Architectural Boundaries & Non-Goals`?
+2.  **State:** Does this change use the `StateManager` as the single source of truth?
+3.  **Compatibility:** Does this change use the `snmpGetWithFallback()` and `validateSNMPString()` helpers?
+4.  **Testing:** Has this change been tested with `go test -race ./...`?
+5.  **Documentation:** Have `config.yml.example` and this manual been updated to match the code?
+
+---
+
 These are the rules and best practices derived from production implementation. All new and existing code must follow them.
 
 ### Docker & Deployment Mandates
@@ -913,6 +930,7 @@ These are the rules and best practices derived from production implementation. A
     * `README.md` is for Docker (primary).
     * `README_NATIVE.md` is for Native (alternative).
     * Security trade-offs (e.g., Docker root vs. Native `setcap`) MUST be explicitly explained in the docs.
+* **Mandate: Binaries MUST be built with version information.** Use Go's `-ldflags` to inject the Git commit, version, and build date into the binary at compile time. The health endpoint must expose this information. This is critical for debugging production issues.
 
 ### Configuration Mandates
 
