@@ -833,7 +833,6 @@ ping_interval: "2s"
 
 # Timeout for individual ping operations
 # Default: "3s"
-# IMPORTANT: Should be > ping_interval to allow error margin
 ping_timeout: "3s"
 
 # Global ping rate limiting (token bucket algorithm)
@@ -855,7 +854,6 @@ ping_backoff_duration: "5m"     # Duration to suspend device after max failures
 * ping_interval specifies the minimum time *between* ping operations (timer resets after each ping completes)
 * This adaptive approach prevents "thundering herd" when rate limiter delays accumulate
 * Lower intervals (e.g., "1s") provide more data points but increase CPU/network load
-* ping_timeout should be > ping_interval to allow proper error margin (recommended: ping_interval + 1s minimum)
 * ping_rate_limit controls global ping rate across all devices (64.0 = 64 pings/sec sustained)
 * ping_burst_limit allows bursts (e.g., startup) up to this many concurrent pings
 * Recommended: burst_limit >= rate_limit to avoid immediate throttling
