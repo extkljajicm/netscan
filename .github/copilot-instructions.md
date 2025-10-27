@@ -647,3 +647,226 @@ The `deploy.sh` script generates a systemd service file with the following secur
   - Up to 3 retry attempts with exponential backoff (1s, 2s, 4s)
   - Increments failed batch counter on final failure
   - Increments successful batch counter on success
+
+### ICMP Discovery (`internal/discovery/scanner.go`)
+
+**Function Signature:**
+```go
+func RunICMPSweep(ctx context.Context, networks []string, workers int, limiter *rate.Limiter) []string
+```
+
+**Worker Pool Pattern:**
+- Creates `jobs` channel (buffered: 256) for IP addresses to ping
+- Creates `results` channel (buffered: 256) for responsive IPs
+- Launches `workers` goroutines (default: 64) that consume from `jobs` channel
+- Each worker:
+  - Acquires token from rate limiter via `limiter.Wait(ctx)` before pinging
+  - Creates pinger with `probing.NewPinger(ip)`
+  - Sends single ICMP echo request (1 second timeout)
+  - Sends responsive IP to `results` channel if `stats.PacketsRecv > 0`
+- Producer goroutine streams IPs from all networks to `jobs` channel, then closes it
+- Wait goroutine waits for all workers via `WaitGroup`, then closes `results` channel
+- Main function collects all responsive IPs from `results` channel and returns slice
+
+**Implementation Details:**
+- **`streamIPsFromCIDR(network string, ipChan chan<- string)`**:
+  - Streams IP addresses from CIDR notation directly to channel
+  - Avoids allocating memory for all IPs at once (memory-efficient for large networks)
+  - Parses CIDR with `net.ParseCIDR()`
+  - Iterates through subnet using `incIP()` helper function
+  - Logs warning for networks larger than /16 (65K hosts)
+  - Safety limit: max 65,536 IPs per network
+- **`SetPrivileged(true)`**:
+  - Configures pinger to use raw ICMP sockets
+  - Requires CAP_NET_RAW capability or root privileges
+  - Necessary for sending/receiving ICMP echo request/reply packets
+
+### SNMP Scanning (`internal/discovery/scanner.go`)
+
+**Function Signature:**
+```go
+func RunSNMPScan(ips []string, snmpConfig *config.SNMPConfig, workers int) []state.Device
+```
+
+**Worker Pool Pattern:**
+- Creates `jobs` channel (buffered: 256) for IP addresses to scan
+- Creates `results` channel (buffered: 256) for discovered devices
+- Launches `workers` goroutines (default: 32) that consume from `jobs` channel
+- Each worker:
+  - Configures `gosnmp.GoSNMP` with target IP, port, community, version, timeout, retries
+  - Connects via `params.Connect()`
+  - Queries standard MIB-II OIDs using `snmpGetWithFallback()`
+  - Validates and sanitizes SNMP responses via `validateSNMPString()`
+  - Sends `state.Device` with IP, Hostname, SysDescr, LastSeen to `results` channel
+- Producer goroutine enqueues all IPs to `jobs` channel, then closes it
+- Wait goroutine waits for all workers via `WaitGroup`, then closes `results` channel
+- Main function collects all discovered devices from `results` channel and returns slice
+
+**SNMP Robustness Features:**
+
+- **`snmpGetWithFallback(params *gosnmp.GoSNMP, oids []string) (*gosnmp.SnmpPacket, error)`**:
+  - **Primary Strategy:** Attempts `params.Get(oids)` first (most efficient for .0 instances)
+  - **Fallback Strategy:** If Get returns `NoSuchInstance`/`NoSuchObject`, tries `params.GetNext()` for each OID
+  - **Rationale:** Some devices don't support .0 instance OIDs, GetNext retrieves next OID in tree
+  - **Validation:** Verifies returned OID has the requested base OID as prefix
+  - **Error Handling:** Returns error if no valid SNMP data retrieved from either method
+
+- **`validateSNMPString(value interface{}, oidName string) (string, error)`**:
+  - **Type Handling:** Accepts both `string` and `[]byte` types (SNMP OctetString values)
+  - **Conversion:** Converts `[]byte` to string via `string(v)`
+  - **Security Checks:**
+    - Rejects strings containing null bytes (`\x00`)
+    - Limits length to 1024 characters (truncates to prevent memory exhaustion)
+  - **Sanitization:**
+    - Replaces newlines/tabs (`\n`, `\r`, `\t`) with spaces
+    - Removes non-printable ASCII characters (< 32 or > 126)
+    - Trims whitespace
+  - **Validation:** Returns error if string is empty after sanitization
+
+**Queried OIDs:**
+- **`1.3.6.1.2.1.1.5.0`** - `sysName` (device hostname)
+- **`1.3.6.1.2.1.1.1.0`** - `sysDescr` (system description from MIB-II)
+
+### Continuous Monitoring (`internal/monitoring/pinger.go`)
+
+**Function Signature:**
+```go
+func StartPinger(ctx context.Context, wg *sync.WaitGroup, device state.Device, interval time.Duration, timeout time.Duration, writer PingWriter, stateMgr StateManager, limiter *rate.Limiter, inFlightCounter *atomic.Int64, totalPingsSent *atomic.Uint64, maxConsecutiveFails int, backoffDuration time.Duration)
+```
+
+**Lifecycle:**
+- Runs as dedicated goroutine per device (one pinger per monitored device)
+- Uses `time.NewTimer()` for scheduling pings at configured intervals
+- Defers `wg.Done()` to signal completion when goroutine exits
+- Includes panic recovery with `defer func() { recover() }` pattern
+- Continues until context is cancelled via `<-ctx.Done()`
+
+**Operation:**
+
+1. **Circuit Breaker Check:**
+   - Calls `stateMgr.IsSuspended(device.IP)` before acquiring rate limiter token
+   - Skips ping if device is suspended (circuit breaker tripped)
+   - Logs debug message and resets timer for next interval
+
+2. **Rate Limiting:**
+   - Acquires token from global rate limiter via `limiter.Wait(ctx)`
+   - Blocks until token available or context cancelled
+   - Ensures compliance with global ping rate limit across all devices
+
+3. **Ping Execution:**
+   - Calls `performPingWithCircuitBreaker()` with device, timeout, writer, state manager, counters, circuit breaker params
+   - Increments `inFlightCounter` (atomic) at start, decrements on completion
+   - Increments `totalPingsSent` (atomic) for observability
+
+4. **IP Validation** (`validateIPAddress(ipStr string) error`):
+   - Checks IP is not empty
+   - Parses IP with `net.ParseIP()`
+   - **Security Checks:**
+     - Rejects loopback addresses (`ip.IsLoopback()`)
+     - Rejects multicast addresses (`ip.IsMulticast()`)
+     - Rejects link-local addresses (`ip.IsLinkLocalUnicast()`)
+     - Rejects unspecified addresses (`ip.IsUnspecified()`)
+   - Returns error if any check fails
+
+5. **Success Criteria:**
+   - Determines success by checking `len(stats.Rtts) > 0 && stats.AvgRtt > 0`
+   - More reliable than just `stats.PacketsRecv` as RTT measurements prove response received
+   - `stats.Rtts` is slice of individual round-trip times
+   - `stats.AvgRtt` is average RTT across all attempts
+
+6. **State Updates on Success:**
+   - Calls `stateMgr.ReportPingSuccess(ip)` to reset circuit breaker failure counter
+   - Calls `stateMgr.UpdateLastSeen(ip)` to update LastSeen timestamp
+
+7. **State Updates on Failure:**
+   - Calls `stateMgr.ReportPingFail(ip, maxConsecutiveFails, backoffDuration)` to increment failure counter
+   - Returns `true` if device was suspended (threshold reached)
+   - Logs warning when circuit breaker trips
+
+8. **Metrics Writing:**
+   - Calls `writer.WritePingResult(ip, rtt, success)` with device IP, RTT, and success boolean
+   - RTT is `stats.AvgRtt` for successful pings, `0` for failures
+   - Logs error if write fails (non-fatal, continues monitoring)
+
+**Interface Design:**
+
+```go
+// PingWriter interface for writing ping results to external storage
+type PingWriter interface {
+WritePingResult(ip string, rtt time.Duration, successful bool) error
+WriteDeviceInfo(ip, hostname, sysDescr string) error
+}
+
+// StateManager interface for updating device last seen timestamp
+type StateManager interface {
+UpdateLastSeen(ip string)
+ReportPingSuccess(ip string)
+ReportPingFail(ip string, maxFails int, backoff time.Duration) bool
+IsSuspended(ip string) bool
+}
+```
+
+### Health Check Server (`cmd/netscan/health.go`)
+
+**HTTP Server:**
+- Server started in `Start()` method via `http.ListenAndServe()`
+- Runs in background goroutine with panic recovery
+- Binds to port specified by `health_check_port` config (default: 8080)
+- Non-blocking: returns immediately after starting goroutine
+- Logs startup with `log.Info().Str("address", addr).Msg("Health check endpoint started")`
+
+**Three Endpoints:**
+
+1. **`/health`** - Detailed health information
+   - Returns comprehensive `HealthResponse` JSON with all metrics
+   - Always returns HTTP 200 (provides status in JSON field)
+   - Calls `GetHealthMetrics()` to gather current metrics
+
+2. **`/health/ready`** - Readiness probe
+   - Checks if service is ready to accept traffic
+   - Tests InfluxDB connectivity via `writer.HealthCheck()`
+   - Returns HTTP 200 with "READY" if InfluxDB accessible
+   - Returns HTTP 503 with "NOT READY: InfluxDB unavailable" if InfluxDB down
+   - Used by orchestrators to determine when to send traffic
+
+3. **`/health/live`** - Liveness probe
+   - Indicates if service process is alive
+   - Always returns HTTP 200 with "ALIVE" if handler responds
+   - Used by orchestrators to determine if container should be restarted
+   - Simple check: if we can respond, we're alive
+
+**Health Response Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | `string` | Overall status: "healthy" (InfluxDB OK) or "degraded" (InfluxDB down) |
+| `version` | `string` | Version string (hardcoded "1.0.0", TODO: build-time variable) |
+| `uptime` | `string` | Human-readable uptime since service start |
+| `device_count` | `int` | Number of devices in StateManager |
+| `suspended_devices` | `int` | Number of devices suspended by circuit breaker |
+| `active_pingers` | `int` | Accurate count of active pinger goroutines (from `activePingers` map) |
+| `influxdb_ok` | `bool` | InfluxDB connectivity status (true if healthy) |
+| `influxdb_successful` | `uint64` | Cumulative successful InfluxDB batch writes |
+| `influxdb_failed` | `uint64` | Cumulative failed InfluxDB batch writes |
+| `pings_sent_total` | `uint64` | Total monitoring pings sent since startup |
+| `goroutines` | `int` | Current Go goroutine count via `runtime.NumGoroutine()` |
+| `memory_mb` | `uint64` | Go heap memory usage in MB (from `runtime.MemStats.Alloc`) |
+| `rss_mb` | `uint64` | OS-level resident set size in MB (from `/proc/self/status`) |
+| `timestamp` | `time.Time` | Current timestamp when metrics collected |
+
+**Note on Memory Metrics:**
+
+- **`memory_mb`** - Go heap allocation
+  - Obtained from `runtime.MemStats.Alloc`
+  - Represents memory allocated by Go runtime for heap objects
+  - Only includes Go-managed memory (heap allocations)
+  - Does not include stack memory, OS-level overhead, or memory-mapped files
+
+- **`rss_mb`** - OS-level resident set size
+  - Obtained via `getRSSMB()` function which reads `/proc/self/status`
+  - Parses `VmRSS` field (in kB) and converts to MB
+  - Represents total physical memory used by process (Linux-specific)
+  - Includes: Go heap, stacks, memory-mapped files, shared libraries, OS overhead
+  - More accurate reflection of actual memory consumption from OS perspective
+  - Returns 0 on failure (non-Linux systems, permission issues, parse errors)
+  - **Implementation:** Opens `/proc/self/status`, scans for line starting with "VmRSS:", parses value in kB, converts to MB
