@@ -298,8 +298,10 @@ func TestContextCancellationPropagation(t *testing.T) {
 	defer parentCancel()
 	
 	// Create child contexts (simulating pinger contexts)
-	childCtx1, _ := context.WithCancel(parentCtx)
-	childCtx2, _ := context.WithCancel(parentCtx)
+	childCtx1, childCancel1 := context.WithCancel(parentCtx)
+	defer childCancel1()
+	childCtx2, childCancel2 := context.WithCancel(parentCtx)
+	defer childCancel2()
 	
 	child1Done := make(chan bool)
 	child2Done := make(chan bool)
