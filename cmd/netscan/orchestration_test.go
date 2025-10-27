@@ -348,8 +348,10 @@ func TestDailySNMPTimeCalculation(t *testing.T) {
 		minute         int
 		shouldBeToday  bool
 	}{
-		{"Future time today", now.Hour() + 1, now.Minute(), true},
-		{"Past time (should be tomorrow)", now.Hour() - 1, now.Minute(), false},
+		// Use a fixed time that will always be in the future today (if current hour < 22)
+		// Otherwise, it will wrap to tomorrow
+		{"Future time (2 hours ahead)", (now.Hour() + 2) % 24, now.Minute(), now.Hour() <= 21},
+		{"Past time (should be tomorrow)", (now.Hour() + 23) % 24, now.Minute(), false},
 		{"Same time (should be tomorrow if seconds have passed)", now.Hour(), now.Minute(), false},
 	}
 	
@@ -380,10 +382,16 @@ func TestDailySNMPTimeCalculation(t *testing.T) {
 			// Allow for a wider range since the test runs at different times of day
 			if !tt.shouldBeToday {
 				duration := scheduledTime.Sub(now)
-				// Should be at least 12 hours (if scheduled later today becomes tomorrow)
-				// and at most 36 hours (if scheduled early in the day)
-				if duration < 12*time.Hour || duration > 36*time.Hour {
-					t.Errorf("Expected 12-36 hours until next run, got %v", duration)
+				// For tomorrow cases, should be at least a few seconds in the future
+				// and at most 24 hours (if we just passed the scheduled time)
+				if duration <= 0 || duration > 24*time.Hour {
+					t.Errorf("Expected 0-24 hours until next run for tomorrow case, got %v", duration)
+				}
+			} else {
+				// For today cases, verify it's less than 24 hours away
+				duration := scheduledTime.Sub(now)
+				if duration >= 24*time.Hour {
+					t.Errorf("Expected less than 24 hours for today case, got %v", duration)
 				}
 			}
 		})
