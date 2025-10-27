@@ -1043,10 +1043,11 @@ These are the rules and best practices derived from production implementation. A
     * Tests for signal handling
     * Tests for pinger reconciliation logic
 * **Mandate: Performance benchmarks MUST exist for hot paths.** Track performance over time:
-    * Benchmark ICMP sweeps
-    * Benchmark SNMP scans
-    * Benchmark state manager operations under load
-    * Benchmark InfluxDB write operations
+    * ✅ **IMPLEMENTED:** State manager operations (`internal/state/manager_bench_test.go`)
+    * ✅ **IMPLEMENTED:** Reconciliation loop efficiency (`cmd/netscan/reconciliation_bench_test.go`)
+    * ❌ **TODO:** ICMP sweeps (future)
+    * ❌ **TODO:** SNMP scans (future)
+    * ❌ **TODO:** InfluxDB write operations under load (future)
 * **Mandate: Resource limit enforcement MUST be tested.** Verify that:
     * `max_devices` limit is enforced
     * `max_concurrent_pingers` limit is enforced
@@ -1253,6 +1254,34 @@ func TestUpdateNewField(t *testing.T) {
 ---
 
 ## Performance Optimization Guidelines
+
+### Benchmark Results (Baseline)
+
+**State Manager Operations (20K devices):**
+```
+GetSuspendedCount()         0.3 ns/op      (O(1) - atomic counter, optimized 2024-10-27)
+Get()                       0.5 μs/op      (O(1) - hash lookup)
+UpdateLastSeen()           48 μs/op        (O(1) - hash lookup + lock)
+AddDevice() at capacity    399 μs/op       (O(n) - LRU eviction, known limitation)
+GetAllIPs()                921 μs/op       (O(n) - full iteration, expected)
+```
+
+**Reconciliation Loop (20K devices, 1% churn):**
+```
+Full Cycle                  2.37 ms/cycle  (every 5 seconds = 0.047% duty cycle)
+Map Build                   921 μs/cycle   (pre-allocated, optimized 2024-10-27)
+Start Logic                 945 μs         (O(n) iteration)
+Stop Logic                  884 μs         (O(n) iteration)
+```
+
+**Resource Utilization (20K devices, 30s ping interval):**
+- Goroutines: ~20,010 (device count + overhead)
+- Heap Memory: ~500 MB
+- RSS Memory: ~800 MB - 1.2 GB
+- CPU: 10-15% on 4-core system
+- InfluxDB write rate: 667 points/sec
+
+See `PERFORMANCE_REVIEW.md` for complete analysis and `MANUAL.md` Section 6 for operational guidance.
 
 ### Batch Operations
 * **InfluxDB Writes:** Batch multiple data points before writing to InfluxDB
