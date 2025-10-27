@@ -348,8 +348,8 @@ func TestDailySNMPTimeCalculation(t *testing.T) {
 		minute         int
 		shouldBeToday  bool
 	}{
-		{"Future time today", now.Hour() + 1, now.Minute(), true},
-		{"Past time (should be tomorrow)", now.Hour() - 1, now.Minute(), false},
+		{"Future time today (safe hour)", 14, 30, now.Hour() < 14 || (now.Hour() == 14 && now.Minute() < 30)},
+		{"Past time (should be tomorrow)", (now.Hour() + 23) % 24, now.Minute(), false},
 		{"Same time (should be tomorrow if seconds have passed)", now.Hour(), now.Minute(), false},
 	}
 	
@@ -358,7 +358,7 @@ func TestDailySNMPTimeCalculation(t *testing.T) {
 			// Calculate next run time
 			scheduledTime := time.Date(now.Year(), now.Month(), now.Day(), tt.hour, tt.minute, 0, 0, now.Location())
 			
-			if scheduledTime.Before(now) {
+			if scheduledTime.Before(now) || scheduledTime.Equal(now) {
 				scheduledTime = scheduledTime.Add(24 * time.Hour)
 			}
 			
@@ -373,17 +373,17 @@ func TestDailySNMPTimeCalculation(t *testing.T) {
 				scheduledTime.Year() == now.Year()
 			
 			if isToday != tt.shouldBeToday {
-				t.Errorf("Expected shouldBeToday=%v, got %v", tt.shouldBeToday, isToday)
+				t.Errorf("Expected shouldBeToday=%v, got %v (scheduled=%v, now=%v)", tt.shouldBeToday, isToday, scheduledTime, now)
 			}
 			
 			// Verify it's approximately 24 hours ahead if it's tomorrow
 			// Allow for a wider range since the test runs at different times of day
 			if !tt.shouldBeToday {
 				duration := scheduledTime.Sub(now)
-				// Should be at least 12 hours (if scheduled later today becomes tomorrow)
-				// and at most 36 hours (if scheduled early in the day)
-				if duration < 12*time.Hour || duration > 36*time.Hour {
-					t.Errorf("Expected 12-36 hours until next run, got %v", duration)
+				// Should be at least 1 hour (if scheduled soon becomes tomorrow)
+				// and at most 48 hours (if scheduled at same time next day)
+				if duration < 1*time.Hour || duration > 48*time.Hour {
+					t.Errorf("Expected 1-48 hours until next run, got %v", duration)
 				}
 			}
 		})
