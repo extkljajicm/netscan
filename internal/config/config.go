@@ -122,9 +122,17 @@ func LoadConfig(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid ping_interval: %v", err)
 	}
-	pingTimeout, err := time.ParseDuration(raw.PingTimeout)
-	if err != nil {
-		return nil, fmt.Errorf("invalid ping_timeout: %v", err)
+	
+	// Parse ping_timeout with default if not specified
+	var pingTimeout time.Duration
+	if raw.PingTimeout != "" {
+		pingTimeout, err = time.ParseDuration(raw.PingTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ping_timeout: %v", err)
+		}
+	} else {
+		// Default to 3s if not specified
+		pingTimeout = 3 * time.Second
 	}
 
 	// Parse MinScanInterval if specified
@@ -295,12 +303,6 @@ func ValidateConfig(cfg *Config) (string, error) {
 	}
 	if cfg.PingInterval < time.Second {
 		return "", fmt.Errorf("ping_interval must be at least 1 second, got %v", cfg.PingInterval)
-	}
-	
-	// Validate ping timeout vs interval relationship
-	// Timeout should be greater than interval to allow proper error margin
-	if cfg.PingTimeout <= cfg.PingInterval {
-		return "WARNING: ping_timeout should be greater than ping_interval to allow proper error margin. Recommended: ping_timeout >= ping_interval + 1s", nil
 	}
 
 	// Validate SNMP daily schedule format (HH:MM)

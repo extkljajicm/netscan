@@ -54,8 +54,7 @@ snmp:
 ping_interval: "2s"
 
 # Timeout for individual ping operations
-# IMPORTANT: Should be > ping_interval to allow error margin
-# Recommended: ping_interval + 1s minimum
+# Default: "3s"
 ping_timeout: "3s"
 
 # Global ping rate limiting (token bucket algorithm)
