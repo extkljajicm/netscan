@@ -31,8 +31,7 @@ services:
     # This file should be created from .env.example: cp .env.example .env
     # If .env doesn't exist, defaults from environment section below are used
     env_file:
-      - path: .env
-        required: false
+      - .env
     
     # Environment variables for config.yml expansion
     # For production: Create a .env file with these variables to avoid storing credentials here
@@ -70,8 +69,7 @@ services:
     # Load environment variables from .env file (optional)
     # If .env doesn't exist, defaults from environment section below are used
     env_file:
-      - path: .env
-        required: false
+      - .env
     
     environment:
       - DOCKER_INFLUXDB_INIT_MODE=${DOCKER_INFLUXDB_INIT_MODE:-setup}
