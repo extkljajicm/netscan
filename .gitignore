@@ -180,4 +180,4 @@ lib-cov/
 *.vsix
 
 # JetBrains (IntelliJ, PyCharm, etc.)
-.idea
+.idea*.backup
