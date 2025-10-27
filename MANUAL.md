@@ -1,11 +1,11 @@
 # netscan - Complete Manual
 
-This manual provides comprehensive documentation for netscan, a production-grade network monitoring service for linux-amd64.
+This manual provides comprehensive documentation for netscan, a production-grade network monitoring service.
 
 **Contents:**
-* Part I: Deployment Guide - Complete deployment instructions for Docker and Native deployments
-* Part II: Development Guide - Architecture, development setup, building, testing, and contributing
-* Part III: Reference Documentation - File structure, dependencies, and API reference
+* **Part I: Deployment Guide** - Complete deployment instructions for Docker and Native deployments
+* **Part II: Development Guide** - Architecture, development setup, building, testing, and contributing *(Coming in next update)*
+* **Part III: Reference Documentation** - Configuration, API reference, and file structure *(Coming in next update)*
 
 ---
 
@@ -13,7 +13,19 @@ This manual provides comprehensive documentation for netscan, a production-grade
 
 ## Overview
 
-netscan is a production-grade network monitoring service written in Go (1.25+) for linux-amd64. Performs automated ICMP discovery, continuous ping monitoring, and SNMP metadata collection with time-series metrics storage in InfluxDB v2.
+netscan is a production-grade Go network monitoring service that performs automated network device discovery and continuous uptime monitoring. The service operates through a multi-ticker event-driven architecture with five independent monitoring workflows:
+
+1. **ICMP Discovery** - Periodic network sweeps to find responsive devices
+2. **SNMP Enrichment** - Scheduled metadata collection from discovered devices
+3. **Continuous Monitoring** - Per-device ICMP ping monitoring with rate limiting
+4. **Pinger Reconciliation** - Automatic lifecycle management of monitoring goroutines
+5. **State Pruning** - Removal of stale devices
+
+All discovered devices are stored in a central StateManager (single source of truth), and all metrics are written to InfluxDB v2 using an optimized batching system.
+
+**Deployment Options:**
+- **Docker Deployment (Recommended)** - Easiest path with automatic orchestration
+- **Native systemd Deployment (Alternative)** - Maximum security with capability-based isolation
 
 ---
 
@@ -23,2337 +35,815 @@ Docker deployment provides the easiest path to get netscan running with automati
 
 ### Prerequisites
 
-* Docker Engine 20.10+
-* Docker Compose V2
-* Network access to target devices
+* **Docker Engine** 20.10 or later
+* **Docker Compose** V2 (comes with Docker Desktop or install separately)
+* **Network access** to target devices for ICMP and SNMP
+* **Host network access** (for ICMP raw sockets - see Architecture Notes below)
 
 ### Installation Steps
 
-**1. Clone Repository**
+#### 1. Clone Repository
+
 ```bash
 git clone https://github.com/kljama/netscan.git
 cd netscan
 ```
 
-**2. Create Configuration File**
+#### 2. Create Configuration File
+
 ```bash
 cp config.yml.example config.yml
 ```
 
-Edit `config.yml` and update the `networks` section with your actual network ranges:
+**CRITICAL:** Edit `config.yml` and update the `networks` section with your actual network ranges:
+
 ```yaml
 networks:
   - "192.168.1.0/24"    # YOUR actual network range
   - "10.0.50.0/24"      # Add additional ranges as needed
 ```
 
-**CRITICAL:** The example networks (192.168.0.0/24, etc.) are placeholders. If these don't match your network, netscan will find 0 devices. Use `ip addr` (Linux) or `ipconfig` (Windows) to determine your network range.
+⚠️ **Important:** The example networks (192.168.0.0/24) are placeholders. If these don't match your network, netscan will find 0 devices. Use `ip addr` (Linux) or `ipconfig` (Windows) to determine your network range.
 
-**3. (Optional) Configure Credentials**
+#### 3. Configure Credentials (Optional but Recommended for Production)
 
-For production security, create a `.env` file instead of using default credentials:
+For production security, create a `.env` file to override default credentials:
+
 ```bash
 cp .env.example .env
 chmod 600 .env
 ```
 
 Edit `.env` and set secure values:
+
 ```bash
-INFLUXDB_TOKEN=<generate-with-openssl-rand-base64-32>
+# InfluxDB Token (generate with: openssl rand -base64 32)
+INFLUXDB_TOKEN=<your-secure-token>
 DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=<same-as-INFLUXDB_TOKEN>
+
+# InfluxDB Admin Password
 DOCKER_INFLUXDB_INIT_PASSWORD=<strong-password>
-SNMP_COMMUNITY=<your-snmp-community-not-public>
+
+# SNMP Community String (change from default 'public')
+SNMP_COMMUNITY=<your-snmp-community>
 ```
 
-The `.env` file is automatically loaded by Docker Compose. Variables are expanded in `config.yml` (e.g., `${INFLUXDB_TOKEN}`).
+The `.env` file is automatically loaded by Docker Compose. Variables are expanded in `config.yml` using syntax like `${INFLUXDB_TOKEN}`.
 
-**4. Start Stack**
+**Default credentials (for testing only):**
+- InfluxDB Token: `netscan-token`
+- InfluxDB Admin: `admin` / `admin123`
+- SNMP Community: `public`
+
+#### 4. Start the Stack
+
 ```bash
 docker compose up -d
 ```
 
-This builds the netscan image from the local Dockerfile and starts both netscan and InfluxDB v2.7.
+This command:
+- Builds the netscan Docker image from the local Dockerfile (multi-stage build)
+- Starts InfluxDB v2.7 container with automatic initialization
+- Starts netscan container with health checks
+- Creates persistent volume for InfluxDB data
 
-**5. Verify Operation**
+#### 5. Verify Operation
+
 ```bash
-# Check container status
+# Check container status (both should be 'Up' and 'healthy')
 docker compose ps
 
-# View netscan logs
+# View netscan logs in real-time
 docker compose logs -f netscan
 
-# Check health endpoint
+# Check health endpoint (requires jq for pretty JSON)
 curl http://localhost:8080/health | jq
+
+# Alternative: check without jq
+curl http://localhost:8080/health
 ```
 
-**6. Access InfluxDB UI (Optional)**
+Expected output from health endpoint:
+```json
+{
+  "status": "healthy",
+  "version": "1.0.0",
+  "uptime": "5m30s",
+  "device_count": 15,
+  "active_pingers": 15,
+  "influxdb_ok": true,
+  ...
+}
+```
+
+#### 6. Access InfluxDB UI (Optional)
 
 Navigate to http://localhost:8086 in your browser:
-* Username: `admin`
-* Password: `admin123` (or your `.env` value)
-* Organization: `test-org`
-* Bucket: `netscan`
+- **Username:** `admin`
+- **Password:** `admin123` (or your `.env` value)
+- **Organization:** `test-org`
+- **Primary Bucket:** `netscan` (ping results and device info)
+- **Health Bucket:** `health` (application metrics)
 
 ### Service Management
 
 ```bash
-# Stop services (keeps data)
-docker compose down
+# Stop services (keeps data volumes)
+docker compose stop
 
-# Stop and remove all data
-docker compose down -v
+# Start services again
+docker compose start
 
-# Restart services
-docker compose restart
+# Restart services (useful after config changes)
+docker compose restart netscan
 
-# Rebuild after code changes
-docker compose up -d --build
-
-# View logs
+# View logs for specific service
 docker compose logs -f netscan
 docker compose logs -f influxdb
+
+# Stop and remove containers (keeps volumes)
+docker compose down
+
+# Stop and remove containers + volumes (DELETES ALL DATA)
+docker compose down -v
+
+# Rebuild and restart after code changes
+docker compose up -d --build
 ```
 
-### Configuration Details
+### Docker Architecture Notes
 
-The `docker-compose.yml` configures:
+#### Why `network_mode: host`?
 
-* **netscan service:**
-  * Builds from local Dockerfile (multi-stage, Go 1.25, ~15MB final image)
-  * `network_mode: host` - Direct access to host network for ICMP/SNMP
-  * `cap_add: NET_RAW` - Linux capability for raw ICMP sockets
-  * Runs as root (required for ICMP in containers, see Security Notes)
-  * Mounts `config.yml` as read-only volume at `/app/config.yml`
-  * Environment variables from `.env` file or defaults
-  * Log rotation configured (10MB max per file, 3 files retained, ~30MB total)
-  * HEALTHCHECK on `/health/live` endpoint (30s interval, 3s timeout, 3 retries, 40s start period)
-  * Auto-restart on failure
+The netscan service uses `network_mode: host` in `docker-compose.yml` to access the host's network stack directly. This is **required** for two reasons:
 
-* **influxdb service:**
-  * InfluxDB v2.7 official image
-  * Exposed on port 8086
-  * Environment variables from `.env` file or defaults
-  * Persistent volume `influxdbv2-data` for data retention
-  * Automatic creation of "netscan" and "health" buckets on initialization
-  * Health check using `influx ping`
+1. **ICMP Raw Sockets:** ICMP ping requires raw socket access, which needs direct access to the host network interfaces
+2. **Network Discovery:** To discover devices on local subnets (192.168.x.x, 10.x.x.x), netscan needs to see the actual network topology
 
-### Security Notes
+**Trade-off:** The container shares the host's network namespace, so port 8080 (health check) is exposed on the host. This is acceptable for a monitoring service but means you cannot run multiple netscan instances on the same host.
 
-**Docker Deployment:**
-* Container runs as root user (non-negotiable requirement for ICMP raw socket access in Linux containers)
-* CAP_NET_RAW capability provides raw socket access without full privileged mode
-* Container remains isolated from host through Docker namespace isolation
-* Minimal Alpine Linux base image (~15MB) reduces attack surface
-* Config file mounted read-only (`:ro`)
+#### Why `cap_add: NET_RAW`?
 
-**Security Trade-off:** Root access is required for ping functionality, but Docker containerization provides security boundary. For maximum security without root, use Native Deployment (Section 2).
+The `NET_RAW` capability grants permission to create raw ICMP sockets. This is defined in `docker-compose.yml`:
 
-### Troubleshooting
-
-**Container finds 0 devices:**
-```bash
-# 1. Verify config.yml exists and is mounted
-docker exec -it netscan cat /app/config.yml | grep -A 5 "networks:"
-
-# 2. Check networks being scanned
-docker compose logs netscan | grep "Scanning networks"
-
-# 3. Verify host network mode
-docker inspect netscan | grep NetworkMode
-# Should show: "NetworkMode": "host"
-
-# 4. Test ping manually
-docker exec -it netscan ping -c 2 192.168.1.1
-# Replace 192.168.1.1 with an IP from your network
+```yaml
+cap_add:
+  - NET_RAW
 ```
 
-**Container keeps restarting:**
-```bash
-# Check logs for errors
-docker compose logs netscan
-
-# Common causes:
-# - Invalid config.yml syntax
-# - InfluxDB credentials mismatch
-# - Missing config.yml file
+The Dockerfile also sets this capability on the binary:
+```dockerfile
+RUN setcap cap_net_raw+ep /app/netscan
 ```
 
-**InfluxDB connection failed:**
-```bash
-# Verify InfluxDB is healthy
-docker compose ps influxdb
+**Security Note:** Even with `CAP_NET_RAW` capability, the container runs as `root` user. This is a Linux kernel limitation - non-root users cannot create raw ICMP sockets in Docker containers despite capability grants. This is documented in the Dockerfile (lines 48-51) as an accepted security trade-off for ICMP functionality.
 
-# Check InfluxDB health endpoint
-curl http://localhost:8086/health
+#### Log Rotation
 
-# Verify credentials in config.yml match docker-compose.yml
-# token: netscan-token (default) or your .env value
-# org: test-org (default) or your .env value
-```
+Docker Compose configures automatic log rotation to prevent disk space exhaustion:
 
-**Health bucket not found errors:**
-```bash
-# The init-influxdb.sh script should automatically create the health bucket
-# If you see errors, verify the init script is mounted:
-docker compose config | grep init-influxdb.sh
-
-# Check InfluxDB logs for bucket creation
-docker compose logs influxdb | grep -i "health bucket"
-
-# Manually verify buckets exist
-docker exec influxdbv2 influx bucket list --org test-org --token netscan-token
-```
-
-**InfluxDB container fails during dashboard provisioning:**
-
-**Symptom:** The InfluxDB container exits with an error during initialization. Logs show `ts=...lvl=info msg="template dry run successful"` followed immediately by `Error: aborted application of template` and `run-parts: /docker-entrypoint-initdb.d/init-influxdb.sh exited with return code 1`.
-
-**Root Cause:** The `influx apply` command requires user confirmation by default when applying templates. In non-interactive environments (like Docker initialization scripts and CI/CD pipelines), the command waits for stdin input that never comes, causing it to abort. The dry run succeeds because it doesn't require confirmation, but the actual application fails.
-
-**Analysis of the Error:**
-1. **Dry run succeeds** - Proves the template file (netscan.json) is valid, readable, and mounted correctly
-2. **Actual apply fails** - The command is waiting for user confirmation (y/n prompt) but running in a non-interactive script
-3. **Why ping check passes** - The `influx ping` check only verifies HTTP endpoint availability, not interactive capabilities
-
-**Fix:** The `init-influxdb.sh` script now includes the `--force yes` flag on all `influx apply` commands. This flag is explicitly recommended by InfluxDB documentation for non-interactive scripts. The fix has been applied to all three dashboard provisioning commands (netscan.json, influxdb_health.json, influxdb_operational_monitoring.yml).
-
-**Verification:**
-```bash
-# Check that the fix is present (should show --force yes on all apply commands)
-grep -A 5 "influx apply" init-influxdb.sh
-
-# If you need to manually apply templates with the correct flag:
-docker exec influxdbv2 influx apply \
-  --file /templates/netscan.json \
-  --org test-org \
-  --token netscan-token \
-  --force yes
-```
-
-**Technical Details:**
-* The `--force yes` flag skips the interactive confirmation prompt
-* This is the recommended approach per InfluxDB CLI documentation for automation
-* The dry run doesn't require this flag because it never modifies resources
-* All three dashboard templates now apply correctly in CI/CD environments
-
-**Pings show success=false despite valid RTT values:**
-
-**Symptom:** InfluxDB queries show `success=false` for ping records that have non-zero `rtt_ms` values (e.g., 12.34ms, 50.1ms). This indicates successful pings are being incorrectly classified as failures.
-
-**Cause:** This was a bug in versions prior to the fix (commit fcbd411). The ping success detection logic relied solely on `stats.PacketsRecv > 0` from the pro-bing library, which had edge cases where the packet counter wasn't updated correctly even though valid RTT data existed.
-
-**Fix:** The code was corrected to use RTT data directly for success detection:
-```go
-// New logic: RTT data proves we got a response
-successful := len(stats.Rtts) > 0 && stats.AvgRtt > 0
-```
-
-**Solution:** Update to the latest version of netscan. The fix ensures that:
-* Non-zero RTT values always result in `success=true`
-* Zero RTT values always result in `success=false`
-* Data consistency is maintained in InfluxDB
-
-**Verification:** After updating, query InfluxDB to confirm all ping records are consistent:
-```bash
-# In InfluxDB UI or CLI, verify no records have non-zero rtt_ms with success=false
-from(bucket: "netscan")
-  |> range(start: -1h)
-  |> filter(fn: (r) => r._measurement == "ping")
-  |> filter(fn: (r) => r._field == "rtt_ms" or r._field == "success")
-```
-
-**Enhanced Logging:** The fix also added detailed packet statistics to debug logs. To view ping diagnostics:
-```bash
-# View debug logs with packet statistics
-docker compose logs netscan | grep -E "(Ping successful|Ping failed)"
-
-# Example output includes: ip, rtt, packets_recv, packets_sent
-# {"level":"debug","ip":"192.168.1.1","rtt":12340000,"packets_recv":1,"packets_sent":1,"message":"Ping successful"}
-```
-
-**Mass "network is unreachable" errors at regular intervals:**
-
-**Symptom:** Logs show recurring mass ping failures with error `"sendmsg: network is unreachable"` at regular intervals (e.g., every 15 minutes), often accompanied by a spike in the `active_pingers` metric.
-
-**Cause:** This is typically caused by **external network events**, NOT an issue with netscan. Common causes include:
-* **ARP cache expiration** (Linux default: 900 seconds = 15 minutes)
-* Router/firewall connection tracking timeouts
-* Network topology changes or routing table updates
-
-**Why the metric spikes:** The behavior occurs in two phases:
-1. **Silent packet loss (Phase 1):** ICMP packets are sent but silently dropped by the network (no echo reply). Pingers wait for the full `ping_timeout` (e.g., 7 seconds), causing `active_pingers` to inflate (Little's Law: 64 pps × 7s = 448 concurrent pings).
-2. **Hard failure (Phase 2):** Once network state fully expires, the kernel rejects packets with `ENETUNREACH` error. These are fast syscall failures (<10ms) that don't inflate the metric.
-
-**Code behavior:** As of the latest version, network unreachable errors are logged as WARN (not ERROR) to reduce noise:
-```bash
-# These are now logged as warnings with diagnostic context:
-{"level":"warn","ip":"192.168.1.1","error":"...network is unreachable","message":"Network routing issue detected (fast syscall failure, check ARP/routing)"}
-```
-
-**Diagnosis:**
-```bash
-# Check ARP cache timeout on the host (likely 900s = 15 minutes)
-docker exec netscan cat /proc/sys/net/ipv4/neigh/default/gc_stale_time
-
-# Monitor ARP cache in real-time
-docker exec netscan watch -n 1 'arp -an'
-
-# Check for the two-phase pattern in logs:
-# 1. Increase in DEBUG "Ping failed - no response" (timeouts)
-# 2. Spike in WARN "Network routing issue detected" (fast failures)
-docker compose logs netscan | grep -E "(Ping failed|Network routing)"
-```
-
-**Solution:**
-* This is **not a bug in netscan** - the application is correctly detecting network issues
-* Work with your network team to identify the external network timer
-* Consider tuning ARP cache timeout if appropriate for your environment
-* Review firewall connection tracking settings for ICMP traffic
-
-### Log Management
-
-**Docker Log Rotation:**
-
-The netscan service is configured with automatic log rotation to prevent disk space exhaustion:
-
-* **Max log file size:** 10MB per file
-* **Files retained:** 3 most recent files
-* **Total disk usage:** ~30MB maximum
-
-Configuration in `docker-compose.yml`:
 ```yaml
 logging:
   driver: json-file
   options:
-    max-size: "10m"
-    max-file: "3"
+    max-size: "10m"  # Maximum size of a single log file
+    max-file: "3"    # Keep 3 most recent log files (~30MB total)
 ```
 
-**Viewing logs:**
-```bash
-# View recent logs
-docker compose logs netscan
+This ensures logs don't grow indefinitely while preserving recent history for debugging.
 
-# Follow logs in real-time
-docker compose logs -f netscan
+#### Health Checks
 
-# View logs with timestamps
-docker compose logs -t netscan
+Both services have health checks configured:
 
-# View last 100 lines
-docker compose logs --tail=100 netscan
+**InfluxDB Health Check:**
+```yaml
+healthcheck:
+  test: ["CMD", "influx", "ping"]
+  interval: 10s
+  timeout: 5s
+  retries: 5
+  start_period: 30s
 ```
 
-**Log rotation behavior:**
-* Logs are rotated automatically when a file reaches 10MB
-* Oldest log files are deleted when more than 3 files exist
-* No manual intervention required
-* Prevents the common issue of unbounded log growth in long-running containers
-
-### InfluxDB Bucket Initialization
-
-**Automatic Bucket Creation:**
-
-The InfluxDB service automatically creates two buckets on initialization:
-
-1. **netscan bucket:** Stores device metrics (ping results, device_info)
-2. **health bucket:** Stores application health metrics (device count, memory, goroutines)
-
-The `init-influxdb.sh` script:
-* Waits for InfluxDB to be ready
-* Checks if the "health" bucket exists
-* Creates it automatically if missing
-* Uses the same retention period as the main bucket (default: 1 week)
-
-**Manual bucket verification:**
-```bash
-# List all buckets
-docker exec influxdbv2 influx bucket list --org test-org --token netscan-token
-
-# Expected output should include both "netscan" and "health" buckets
+**netscan Health Check:**
+```yaml
+healthcheck:
+  test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health/live"]
+  interval: 30s
+  timeout: 3s
+  retries: 3
+  start_period: 40s
 ```
 
-**Bucket configuration:**
-* Retention period: 1 week (default, configurable via `DOCKER_INFLUXDB_INIT_RETENTION`)
-* Organization: test-org (default, configurable via `DOCKER_INFLUXDB_INIT_ORG`)
-* Both buckets created automatically on first startup
-* Subsequent restarts skip creation if buckets already exist
-
-### Dashboard Provisioning
-
-**Automatic Dashboard Creation:**
-
-The InfluxDB service automatically provisions three dashboards on first startup, making the service observable out-of-the-box. These dashboards are immediately available in the InfluxDB UI at http://localhost:8086 after running `docker compose up`.
-
-**Three Pre-configured Dashboards:**
-
-1. **Netscan Dashboard** (`netscan.json`)
-   - Primary network monitoring dashboard
-   - Real-time device discovery metrics
-   - Ping latency trends and statistics
-   - Device uptime monitoring
-   - Network health overview
-
-2. **InfluxDB Health Dashboard** (`influxdb_health.json`)
-   - Application health monitoring for the netscan service
-   - Active pinger count
-   - Memory usage (heap and RSS)
-   - Goroutine count
-   - InfluxDB write success/failure rates
-   - Device count tracking
-
-3. **InfluxDB 2.0 Operational Monitoring** (`influxdb_operational_monitoring.yml`)
-   - InfluxDB internal operational monitoring
-   - Task execution metrics
-   - Database cardinality tracking
-   - Query performance metrics
-   - System resource utilization
-
-**How It Works:**
-
-The `init-influxdb.sh` script automatically applies all dashboard templates from the `influxdb/templates/` directory during initialization:
-* Templates are mounted read-only at `/templates` inside the container
-* Each template is applied using the `influx apply` command
-* Provisioning happens only on first startup (when database is initialized)
-* Subsequent restarts skip dashboard creation if they already exist
-
-**Accessing the Dashboards:**
-
-1. Navigate to http://localhost:8086 in your browser
-2. Log in with your credentials (default: admin/admin123)
-3. Click on "Dashboards" in the left sidebar
-4. All three dashboards will be available in the list
-
-**Adding Custom Dashboards:**
-
-To add additional dashboards to auto-provisioning:
-1. Export your dashboard from the InfluxDB UI (Settings → Templates → Export)
-2. Save the exported JSON/YAML file to `influxdb/templates/`
-3. Add an `influx apply` command to the `init-influxdb.sh` script
-4. Rebuild and restart: `docker compose down -v && docker compose up -d`
-
-For more details, see `influxdb/templates/README.md`.
-
-### Common Operations
-
-#### Building and Running with the Latest Code
-
-When you make changes to the Go source code, you must rebuild the Docker image to include them. The `--build` flag forces Docker Compose to re-run the build process.
-
-```bash
-docker-compose up -d --build
+The netscan container waits for InfluxDB to be healthy before starting:
+```yaml
+depends_on:
+  influxdb:
+    condition: service_healthy
 ```
 
-#### Starting a Fresh Deployment
+### Troubleshooting
 
-If you need to start with a completely empty database, you can stop the services and remove the persistent InfluxDB data volume. The `-v` flag removes the named volumes defined in `docker-compose.yml`.
+#### Issue: "0 devices found" in logs
+
+**Cause:** Network ranges in `config.yml` don't match your actual network.
+
+**Solution:**
+1. Find your network range: `ip addr` (Linux) or `ipconfig` (Windows)
+2. Update `networks` in `config.yml` with correct CIDR notation
+3. Restart: `docker compose restart netscan`
+
+**Example:** If your IP is `192.168.1.50` with subnet mask `255.255.255.0`, use `192.168.1.0/24`
+
+#### Issue: "InfluxDB connection failed" on startup
+
+**Cause:** InfluxDB not ready or credentials mismatch.
+
+**Solution:**
+1. Check InfluxDB is healthy: `docker compose ps` (should show "healthy")
+2. Check InfluxDB logs: `docker compose logs influxdb`
+3. Verify token in `.env` matches between `INFLUXDB_TOKEN` and `DOCKER_INFLUXDB_INIT_ADMIN_TOKEN`
+4. If token changed, recreate containers: `docker compose down -v && docker compose up -d`
+
+#### Issue: Health check endpoint returns 503 "NOT READY"
+
+**Cause:** Service started but InfluxDB connectivity failing.
+
+**Solution:**
+1. Check `/health/ready` endpoint: `curl http://localhost:8080/health/ready`
+2. Check `/health` for details: `curl http://localhost:8080/health | jq .influxdb_ok`
+3. Verify InfluxDB is accessible: `curl http://localhost:8086/health`
+4. Check network connectivity between containers
+
+#### Issue: Permission denied errors for ICMP
+
+**Cause:** Container doesn't have NET_RAW capability or not running as root.
+
+**Solution:**
+1. Verify capability in docker-compose.yml: `cap_add: - NET_RAW`
+2. Check container is running as root (this is required, not a bug)
+3. Restart containers: `docker compose restart netscan`
+
+#### Issue: High memory usage
+
+**Cause:** Monitoring too many devices or rate limits too high.
+
+**Solution:**
+1. Check device count: `curl http://localhost:8080/health | jq .device_count`
+2. Reduce network ranges in `config.yml`
+3. Lower `ping_rate_limit` and `ping_burst_limit` in `config.yml`
+4. Increase `memory_limit_mb` if devices are legitimate
+5. Restart: `docker compose restart netscan`
+
+#### Issue: Containers exit immediately
+
+**Cause:** Configuration error or missing files.
+
+**Solution:**
+1. Check logs: `docker compose logs netscan`
+2. Verify `config.yml` exists and is valid YAML
+3. Ensure `.env` file has no syntax errors
+4. Try starting in foreground: `docker compose up` (without `-d`)
+
+### Cleaning Up
+
+To completely remove netscan and all data:
 
 ```bash
-# This will permanently delete all stored monitoring data.
-docker-compose down -v
-```
+# Stop and remove all containers and volumes
+docker compose down -v
 
-After running this, you can start the services again with `docker-compose up -d`.
+# Remove Docker images
+docker rmi netscan:latest influxdb:2.7
 
-#### Reclaiming Disk Space
-
-Docker can accumulate a lot of unused images, containers, and build cache over time. You can reclaim this space using Docker's built-in `prune` command.
-
-```bash
-# This command safely removes unused Docker objects.
-docker system prune
+# Remove any orphaned volumes
+docker volume prune
 ```
 
 ---
 
 ## Section 2: Native systemd Deployment (Alternative)
 
-Native deployment provides maximum security by running as a non-root service user with Linux capabilities. Recommended for production environments requiring strict security controls.
+Native systemd deployment provides maximum security through capability-based isolation and dedicated system users. This is the recommended deployment for security-conscious production environments.
 
 ### Prerequisites
 
-* Go 1.25+
-* InfluxDB 2.x (separate installation)
-* Linux with systemd
-* Root privileges for installation (service runs as non-root)
+* **Go** 1.25 or later
+* **InfluxDB** v2.x running and accessible (local or remote)
+* **systemd** (most modern Linux distributions)
+* **libcap** package for setcap command
+* **Root/sudo access** for installation
 
-### Installation
+### Verifying Prerequisites
 
-**1. Install Dependencies**
-
-Ubuntu/Debian:
 ```bash
-sudo apt update
-sudo apt install golang-go
+# Check Go version (should be 1.25+)
+go version
+
+# Check systemd
+systemctl --version
+
+# Check if setcap is available
+which setcap
+
+# Verify InfluxDB is running (if local)
+curl http://localhost:8086/health
 ```
 
-Arch/CachyOS:
-```bash
-sudo pacman -S go
-```
+### Installation Using deploy.sh
 
-**2. Clone and Build**
+The `deploy.sh` script automates the entire installation process with proper security hardening.
+
+#### 1. Clone and Prepare
+
 ```bash
 git clone https://github.com/kljama/netscan.git
 cd netscan
-go mod download
-go build -o netscan ./cmd/netscan
 ```
 
-**3. Deploy with Automated Script**
+#### 2. Configure Application
+
+```bash
+# Copy configuration template
+cp config.yml.example config.yml
+
+# Edit configuration with your network ranges and InfluxDB details
+nano config.yml  # or vim, vi, etc.
+```
+
+**Required changes in `config.yml`:**
+- `networks`: Your actual CIDR ranges
+- `influxdb.url`: InfluxDB server URL (e.g., `http://localhost:8086`)
+- `influxdb.token`: Use `${INFLUXDB_TOKEN}` for environment variable expansion
+- `snmp.community`: Use `${SNMP_COMMUNITY}` for environment variable expansion
+
+#### 3. Run Deployment Script
+
 ```bash
 sudo ./deploy.sh
 ```
 
-This creates:
-* `/opt/netscan/` directory with binary, config, and `.env` file
-* `netscan` system user (no shell, minimal privileges)
-* CAP_NET_RAW capability on binary (via setcap)
-* Systemd service unit with security restrictions
-* Secure `.env` file (mode 600) for credentials
+**What the script does:**
 
-**4. Configure**
+1. **Go Version Check:** Verifies Go 1.21+ is installed
+2. **Binary Build:** Compiles netscan binary from source
+3. **Service User Creation:** Creates dedicated `netscan` system user
+   - System account (UID < 1000)
+   - No shell access (`/bin/false`)
+   - No home directory
+   - Cannot login
+4. **File Installation:**
+   - Creates `/opt/netscan/` directory
+   - Installs binary to `/opt/netscan/netscan`
+   - Copies `config.yml` to `/opt/netscan/config.yml`
+   - Creates `/opt/netscan/.env` with secure environment variables
+5. **Permission Setting:**
+   - Binary: `755` (executable)
+   - .env file: `600` (owner read/write only)
+   - Ownership: `netscan:netscan`
+6. **Capability Grant:** Sets `cap_net_raw+ep` on binary for ICMP access
+7. **systemd Service Creation:** Installs and enables service
+8. **Service Start:** Starts netscan service immediately
 
-Edit `/opt/netscan/config.yml` with your network ranges:
-```yaml
-networks:
-  - "192.168.1.0/24"    # YOUR actual network
+**Expected output:**
+```
+[INFO] Go 1.25.1 found ✓
+[INFO] Building netscan binary...
+[INFO] Binary built successfully ✓
+[INFO] Creating service user: netscan
+[INFO] Service user created successfully ✓
+[INFO] Installing files to /opt/netscan
+[INFO] .env file created with secure placeholders ✓
+[INFO] Files installed successfully ✓
+[INFO] Setting ownership and permissions
+[INFO] .env file permissions set to 600 ✓
+[INFO] Permissions set successfully ✓
+[INFO] Setting CAP_NET_RAW capability for ICMP access
+[INFO] Capabilities set successfully ✓
+[INFO] Creating systemd service
+[INFO] Systemd service created ✓
+[INFO] Enabling and starting systemd service
+[INFO] Service enabled and started successfully ✓
+[INFO] netscan deployed and running as a systemd service
 ```
 
-Edit `/opt/netscan/.env` with your InfluxDB credentials:
+#### 4. Configure Environment Variables
+
+Edit `/opt/netscan/.env` with your actual credentials:
+
 ```bash
-INFLUXDB_URL=http://localhost:8086
-INFLUXDB_TOKEN=<your-influxdb-token>
-INFLUXDB_ORG=<your-org>
-INFLUXDB_BUCKET=netscan
-SNMP_COMMUNITY=<your-snmp-community>
+sudo nano /opt/netscan/.env
 ```
 
-**5. Start Service**
+**Required values:**
 ```bash
-sudo systemctl start netscan
-sudo systemctl enable netscan  # Start on boot
+# InfluxDB credentials
+INFLUXDB_TOKEN=your-actual-influxdb-token
+INFLUXDB_ORG=your-org-name
+
+# SNMP community string
+SNMP_COMMUNITY=your-snmp-community
 ```
+
+After editing, restart the service:
+```bash
+sudo systemctl restart netscan
+```
+
+### Security Model
+
+The native deployment provides significantly better security than Docker:
+
+#### 1. Dedicated System User
+
+```bash
+# Created by deploy.sh
+useradd -r -s /bin/false netscan
+```
+
+- `-r`: System account (non-interactive, UID < 1000)
+- `-s /bin/false`: Prevents shell login
+- No password set (cannot login)
+- Principle of least privilege
+
+#### 2. Capability-Based Security
+
+Instead of running as root, the binary is granted only the specific capability it needs:
+
+```bash
+# Applied by deploy.sh
+setcap cap_net_raw+ep /opt/netscan/netscan
+```
+
+- `cap_net_raw`: Allows raw ICMP socket creation
+- `+ep`: Effective and Permitted flags
+- Capability persists across executions
+- Much safer than full root privileges
+
+You can verify the capability:
+```bash
+getcap /opt/netscan/netscan
+# Output: /opt/netscan/netscan = cap_net_raw+ep
+```
+
+#### 3. systemd Service Hardening
+
+The generated systemd service (`/etc/systemd/system/netscan.service`) includes multiple security hardening directives:
+
+```ini
+[Service]
+Type=simple
+User=netscan
+Group=netscan
+ExecStart=/opt/netscan/netscan
+WorkingDirectory=/opt/netscan
+
+# Environment variables from secure file
+EnvironmentFile=/opt/netscan/.env
+
+# Security hardening
+NoNewPrivileges=yes          # Prevents privilege escalation
+PrivateTmp=yes               # Isolated /tmp directory
+ProtectSystem=strict         # Read-only filesystem except /opt/netscan
+AmbientCapabilities=CAP_NET_RAW  # Only grant needed capability
+```
+
+#### 4. Secure Credential Storage
+
+The `.env` file is protected:
+- Permissions: `600` (owner read/write only)
+- Owner: `netscan:netscan`
+- Contains sensitive tokens and credentials
+- Automatically loaded by systemd via `EnvironmentFile` directive
+- Not readable by other users
+
+**Comparison with Docker:**
+
+| Security Aspect | Native systemd | Docker |
+|----------------|----------------|---------|
+| User privileges | Dedicated non-root user | root (required) |
+| Capability model | Single capability (CAP_NET_RAW) | Full CAP_NET_RAW |
+| Filesystem | ProtectSystem=strict | Container isolation |
+| Shell access | /bin/false (disabled) | N/A |
+| Tmp isolation | PrivateTmp=yes | N/A |
+| Privilege escalation | NoNewPrivileges=yes | N/A |
 
 ### Service Management
 
+#### Start/Stop/Restart
+
 ```bash
-# Check status
-sudo systemctl status netscan
+# Start service
+sudo systemctl start netscan
 
-# View logs
-sudo journalctl -u netscan -f
+# Stop service
+sudo systemctl stop netscan
 
-# Restart
+# Restart service (after config changes)
 sudo systemctl restart netscan
 
-# Stop
-sudo systemctl stop netscan
+# Check if service is running
+sudo systemctl is-active netscan
+```
+
+#### Enable/Disable Auto-Start
+
+```bash
+# Enable auto-start on boot (done by deploy.sh)
+sudo systemctl enable netscan
 
 # Disable auto-start
 sudo systemctl disable netscan
+
+# Check if enabled
+sudo systemctl is-enabled netscan
 ```
 
-### Manual Deployment (Alternative)
-
-If you prefer not to use `deploy.sh`:
+#### View Status
 
 ```bash
-# Build binary
+# Detailed status with recent log entries
+sudo systemctl status netscan
+
+# Example output:
+● netscan.service - netscan network monitoring service
+     Loaded: loaded (/etc/systemd/system/netscan.service; enabled)
+     Active: active (running) since Mon 2024-01-15 10:30:45 UTC; 2h ago
+   Main PID: 1234 (netscan)
+      Tasks: 25
+     Memory: 45.2M
+        CPU: 1min 30s
+     CGroup: /system.slice/netscan.service
+             └─1234 /opt/netscan/netscan
+```
+
+#### View Logs
+
+```bash
+# Follow logs in real-time (recommended)
+sudo journalctl -u netscan -f
+
+# View last 100 lines
+sudo journalctl -u netscan -n 100
+
+# View logs since last boot
+sudo journalctl -u netscan -b
+
+# View logs from specific time
+sudo journalctl -u netscan --since "1 hour ago"
+sudo journalctl -u netscan --since "2024-01-15 10:00:00"
+
+# View logs with priority level (errors only)
+sudo journalctl -u netscan -p err
+
+# Export logs to file
+sudo journalctl -u netscan > netscan.log
+```
+
+#### Configuration Changes
+
+After modifying `/opt/netscan/config.yml` or `/opt/netscan/.env`:
+
+```bash
+# Restart to apply changes
+sudo systemctl restart netscan
+
+# Verify service restarted successfully
+sudo systemctl status netscan
+
+# Check logs for errors
+sudo journalctl -u netscan -f
+```
+
+### Uninstallation Using undeploy.sh
+
+The `undeploy.sh` script safely removes netscan and all associated files:
+
+```bash
+sudo ./undeploy.sh
+```
+
+**What the script does:**
+
+1. **Stop Service:** Gracefully stops running service
+2. **Disable Service:** Removes from auto-start
+3. **Remove Service File:** Deletes `/etc/systemd/system/netscan.service`
+4. **Reload systemd:** Updates systemd daemon
+5. **Remove Capabilities:** Clears capabilities from binary
+6. **Delete Installation Directory:** Removes `/opt/netscan/` and all contents
+7. **Remove Service User:** Deletes `netscan` system user
+8. **Verify Cleanup:** Confirms complete removal
+
+**Expected output:**
+```
+[INFO] Stopping and disabling netscan service
+[INFO] Service stopped ✓
+[INFO] Service disabled ✓
+[INFO] Removing systemd service file
+[INFO] Service file removed ✓
+[INFO] Systemd daemon reloaded ✓
+[INFO] Removing capabilities from binary
+[INFO] Capabilities removed ✓
+[INFO] Removing installation directory: /opt/netscan
+[INFO] Installation directory removed (45M) ✓
+[INFO] Removing service user: netscan
+[INFO] Service user removed ✓
+[INFO] No additional artifacts found ✓
+[INFO] Complete removal verified ✓
+[INFO] netscan has been completely uninstalled
+```
+
+### Manual Installation (Advanced)
+
+If you prefer manual installation or need to customize:
+
+```bash
+# 1. Build binary
 go build -o netscan ./cmd/netscan
 
-# Create installation directory
+# 2. Create user
+sudo useradd -r -s /bin/false netscan
+
+# 3. Create installation directory
 sudo mkdir -p /opt/netscan
+
+# 4. Install files
 sudo cp netscan /opt/netscan/
 sudo cp config.yml /opt/netscan/
+sudo cp .env.example /opt/netscan/.env
 
-# Set ICMP capability
+# 5. Set permissions
+sudo chown -R netscan:netscan /opt/netscan
+sudo chmod 755 /opt/netscan/netscan
+sudo chmod 600 /opt/netscan/.env
+
+# 6. Set capability
 sudo setcap cap_net_raw+ep /opt/netscan/netscan
 
-# Create service user
-sudo useradd -r -s /bin/false netscan
-sudo chown -R netscan:netscan /opt/netscan
+# 7. Create systemd service (see deploy.sh for template)
+sudo nano /etc/systemd/system/netscan.service
 
-# Create systemd service
-sudo tee /etc/systemd/system/netscan.service > /dev/null <<EOF
-[Unit]
-Description=netscan network monitoring
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/opt/netscan/netscan
-WorkingDirectory=/opt/netscan
-Restart=always
-User=netscan
-Group=netscan
-
-# Load environment variables
-EnvironmentFile=/opt/netscan/.env
-
-# Security settings
-NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
-AmbientCapabilities=CAP_NET_RAW
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Reload and start
+# 8. Enable and start
 sudo systemctl daemon-reload
 sudo systemctl enable netscan
 sudo systemctl start netscan
 ```
 
-### Security Features
-
-**Native Deployment Security:**
-* Runs as dedicated `netscan` service user (not root)
-* Service user has `/bin/false` shell (no interactive login)
-* CAP_NET_RAW capability via setcap (no root required for ICMP)
-* Systemd security restrictions: NoNewPrivileges, PrivateTmp, ProtectSystem=strict
-* Credentials in `.env` file with mode 600 (readable only by service user)
-
-**Comparison with Docker:**
-* Native: Non-root execution, tighter security controls
-* Docker: Root required for ICMP, container isolation provides security boundary
-
-### Command Line Usage
-
-```bash
-# Standard mode (uses config.yml in working directory)
-./netscan
-
-# Custom config path
-./netscan -config /path/to/config.yml
-
-# Help
-./netscan -help
-```
-
-### Health Check Endpoint
-
-Once running, the service exposes an HTTP server on port 8080 (configurable):
-
-```bash
-# Detailed health status
-curl http://localhost:8080/health | jq
-
-# Readiness probe (for load balancers)
-curl http://localhost:8080/health/ready
-
-# Liveness probe (for process monitors)
-curl http://localhost:8080/health/live
-```
-
-### Uninstallation
-
-**Automated:**
-```bash
-sudo ./undeploy.sh
-```
-
-**Manual:**
-```bash
-sudo systemctl stop netscan
-sudo systemctl disable netscan
-sudo rm /etc/systemd/system/netscan.service
-sudo systemctl daemon-reload
-sudo rm -rf /opt/netscan
-sudo userdel netscan
-```
-
 ### Troubleshooting
 
-**ICMP permission denied:**
-```bash
-# Check capability
-getcap /opt/netscan/netscan
-# Should show: cap_net_raw+ep
+#### Issue: "permission denied" when creating raw socket
 
-# Manually set capability
-sudo setcap cap_net_raw+ep /opt/netscan/netscan
-```
-
-**InfluxDB connection issues:**
-```bash
-# Verify InfluxDB is running
-systemctl status influxdb
-
-# Test connectivity
-curl http://localhost:8086/health
-
-# Check credentials in /opt/netscan/.env
-# Review logs
-sudo journalctl -u netscan -n 50
-```
-
-**No devices discovered:**
-```bash
-# Verify network ranges in config.yml
-# Check firewall rules for ICMP/SNMP
-# Test manually
-ping 192.168.1.1
-# Check logs
-sudo journalctl -u netscan | grep discovery
-```
-
-**Mass "network is unreachable" errors at regular intervals:**
-
-**Symptom:** Logs show recurring mass ping failures with error `"sendmsg: network is unreachable"` at regular intervals (e.g., every 15 minutes), often accompanied by a spike in the `active_pingers` metric.
-
-**Cause:** This is typically caused by **external network events**, NOT an issue with netscan. Common causes include:
-* **ARP cache expiration** (Linux default: 900 seconds = 15 minutes)
-* Router/firewall connection tracking timeouts
-* Network topology changes or routing table updates
-
-**Why the metric spikes:** The behavior occurs in two phases:
-1. **Silent packet loss (Phase 1):** ICMP packets are sent but silently dropped by the network (no echo reply). Pingers wait for the full `ping_timeout` (e.g., 7 seconds), causing `active_pingers` to inflate (Little's Law: 64 pps × 7s = 448 concurrent pings).
-2. **Hard failure (Phase 2):** Once network state fully expires, the kernel rejects packets with `ENETUNREACH` error. These are fast syscall failures (<10ms) that don't inflate the metric.
-
-**Code behavior:** As of the latest version, network unreachable errors are logged as WARN (not ERROR) to reduce noise:
-```bash
-# These are now logged as warnings with diagnostic context:
-{"level":"warn","ip":"192.168.1.1","error":"...network is unreachable","message":"Network routing issue detected (fast syscall failure, check ARP/routing)"}
-```
-
-**Diagnosis:**
-```bash
-# Check ARP cache timeout on the host (likely 900s = 15 minutes)
-cat /proc/sys/net/ipv4/neigh/default/gc_stale_time
-
-# Monitor ARP cache in real-time
-watch -n 1 'arp -an'
-
-# Check for the two-phase pattern in logs:
-# 1. Increase in DEBUG "Ping failed - no response" (timeouts)
-# 2. Spike in WARN "Network routing issue detected" (fast failures)
-sudo journalctl -u netscan | grep -E "(Ping failed|Network routing)"
-```
+**Cause:** Binary doesn't have CAP_NET_RAW capability.
 
 **Solution:**
-* This is **not a bug in netscan** - the application is correctly detecting network issues
-* Work with your network team to identify the external network timer
-* Consider tuning ARP cache timeout if appropriate for your environment
-* Review firewall connection tracking settings for ICMP traffic
+```bash
+# Check current capabilities
+getcap /opt/netscan/netscan
 
----
+# If missing, set capability
+sudo setcap cap_net_raw+ep /opt/netscan/netscan
 
-## Section 3: Configuration Reference
+# Restart service
+sudo systemctl restart netscan
+```
 
-Complete documentation of all configuration parameters. All duration fields accept Go duration format (e.g., "5m", "2s", "1h30m").
+#### Issue: Service fails to start
 
-### Configuration File Location
+**Cause:** Configuration error or permission issue.
 
-* **Docker:** `/app/config.yml` (mounted from host `./config.yml`)
-* **Native:** `config.yml` in working directory or via `-config` flag
+**Solution:**
+```bash
+# Check service status
+sudo systemctl status netscan
 
-### Environment Variable Expansion
+# View detailed logs
+sudo journalctl -u netscan -n 50
 
-The configuration file supports `${VAR_NAME}` syntax for environment variable expansion. Variables are loaded from:
-* **Docker:** docker-compose.yml environment section or `.env` file
-* **Native:** `/opt/netscan/.env` file (loaded by systemd EnvironmentFile)
+# Common issues:
+# - config.yml syntax error: Validate YAML
+# - InfluxDB unreachable: Check URL and network
+# - Permission issue: Verify ownership is netscan:netscan
+```
 
-### Network Discovery Settings
+#### Issue: "0 devices found"
 
-```yaml
-# Network ranges to scan (CIDR notation)
-# REQUIRED: Update with YOUR actual network ranges
+**Cause:** Network ranges don't match actual network.
+
+**Solution:**
+```bash
+# Edit config
+sudo nano /opt/netscan/config.yml
+
+# Update networks section
 networks:
-  - "192.168.1.0/24"    # Example: Home network
-  - "10.0.50.0/24"      # Example: Server network
-  # Add more ranges as needed
+  - "your-actual-network/24"
+
+# Restart
+sudo systemctl restart netscan
 ```
 
-**Notes:**
-* Use CIDR notation (e.g., `/24` for 254 hosts, `/16` for 65,534 hosts)
-* Smaller ranges scan faster
-* Maximum /16 recommended (security limit)
+#### Issue: InfluxDB connection failed
 
-```yaml
-# How often to run ICMP discovery to find new devices
-# Default: "5m"
-# Range: Minimum "1m" (enforced by min_scan_interval)
-icmp_discovery_interval: "5m"
-```
+**Cause:** Wrong credentials or InfluxDB not accessible.
 
-**Notes:**
-* More frequent scans find new devices faster but increase CPU/network load
-* 5 minutes is reasonable for most networks
-
-```yaml
-# Daily scheduled SNMP scan time (HH:MM format, 24-hour)
-# Full SNMP scan of all known devices runs once per day at this time
-# Default: "02:00" (2:00 AM)
-# Set to empty string "" to disable scheduled SNMP scans
-snmp_daily_schedule: "02:00"
-```
-
-**Notes:**
-* Uses local system time
-* Immediate SNMP scan still runs on device discovery
-* Schedule useful for refreshing metadata overnight
-
-### SNMP Settings
-
-```yaml
-snmp:
-  # SNMPv2c community string (uses environment variable expansion)
-  # Default: "public" (CHANGE THIS for production!)
-  community: "${SNMP_COMMUNITY}"
-  
-  # SNMP port
-  # Default: 161
-  port: 161
-  
-  # Timeout for SNMP queries
-  # Default: "5s"
-  timeout: "5s"
-  
-  # Number of retries for failed SNMP queries
-  # Default: 1
-  retries: 1
-```
-
-**Notes:**
-* SNMPv2c uses plain-text community strings (not secure)
-* SNMPv3 support is deferred to future releases
-* Increase timeout for slow/distant devices
-* Increase retries for unreliable networks
-
-### Monitoring Settings
-
-```yaml
-# Ping frequency per monitored device
-# Default: "2s"
-# Minimum time between ping attempts for each device (adaptive scheduling)
-ping_interval: "2s"
-
-# Timeout for individual ping operations
-# Default: "3s"
-ping_timeout: "3s"
-
-# Global ping rate limiting (token bucket algorithm)
-# Controls the sustained rate of ICMP pings across ALL operations:
-#   - Continuous monitoring pingers (per-device health checks)
-#   - ICMP discovery scans (network-wide device discovery)
-# Default: 64.0 pings/sec, burst: 256
-# Prevents network bursts, especially on startup when all pingers fire simultaneously
-# Note: Large networks may take longer to complete discovery scans due to rate limiting
-ping_rate_limit: 64.0    # Tokens per second (sustained ping rate)
-ping_burst_limit: 256    # Token bucket capacity (max burst size)
-
-# Circuit breaker settings for automatic device suspension
-# Automatically suspends devices that fail ping checks consecutively
-# This prevents wasting resources on devices that are likely offline
-# Default: 10 consecutive failures, 5 minute suspension
-ping_max_consecutive_fails: 10  # Number of consecutive failures before suspension
-ping_backoff_duration: "5m"     # Duration to suspend device after max failures
-```
-
-**Notes:**
-* ping_interval specifies the minimum time *between* ping operations (timer resets after each ping completes)
-* This adaptive approach prevents "thundering herd" when rate limiter delays accumulate
-* Lower intervals (e.g., "1s") provide more data points but increase CPU/network load
-* **ping_rate_limit controls global ping rate across ALL ping operations:**
-  * Continuous monitoring pingers (per-device health checks every `ping_interval`)
-  * ICMP discovery scans (network-wide sweeps every `icmp_discovery_interval`)
-  * Both operations share the same token bucket, preventing network overload
-* **Discovery scan performance:** With `ping_rate_limit: 64.0` and a /24 network (254 hosts):
-  * Minimum scan time: ~4 seconds (254 pings ÷ 64 pings/sec)
-  * Actual time may be longer due to continuous monitoring consuming tokens
-  * Increase `ping_rate_limit` if discovery scans are too slow
-* ping_burst_limit allows bursts (e.g., startup) up to this many concurrent pings
-* Recommended: burst_limit >= rate_limit to avoid immediate throttling
-* Example: With 100 devices pinging every 2s, peak load = 50 pings/sec (well under default 64/sec limit)
-
-**Circuit Breaker Notes:**
-* Devices that fail `ping_max_consecutive_fails` consecutive pings are temporarily suspended
-* Suspended devices are not pinged for `ping_backoff_duration` (saves network I/O and reduces log noise)
-* After suspension expires, pinging automatically resumes
-* A single successful ping resets the failure counter to zero
-* Circuit breaker state is tracked per-device in the StateManager
-* Suspended devices remain in the device list and can still be discovered by ICMP discovery scans
-
-### Performance Tuning
-
-```yaml
-# Number of concurrent ICMP ping workers for discovery scans
-# Default: 64 (safe for most deployments)
-# Recommended: Start with 64 and increase if needed for large networks
-# Range: 1-2000
-# WARNING: Values >256 may cause kernel raw socket buffer overflow
-icmp_workers: 64
-
-# Number of concurrent SNMP polling workers
-# Default: 32 (safe for most deployments)
-# Recommended: 25-50% of icmp_workers to avoid overwhelming SNMP agents
-# Range: 1-1000
-snmp_workers: 32
-```
-
-**Worker Count Guidelines:**
-
-| System Type       | Network Size | ICMP Workers | SNMP Workers | Max Devices | Max Pingers |
-|-------------------|--------------|--------------|--------------|-------------|-------------|
-| Raspberry Pi      | <100 devs    | 32           | 16           | 100         | 100         |
-| Home Server       | <500 devs    | 64           | 32           | 500         | 500         |
-| Workstation       | <2000 devs   | 128          | 64           | 2000        | 2000        |
-| Small Server      | <5000 devs   | 256          | 128          | 5000        | 5000        |
-| Large Server      | 5000+ devs   | 512          | 256          | 20000       | 20000       |
-
-**Notes:**
-* Start conservative with default 64/32 workers and increase based on network size and performance
-* Values >256 for ICMP workers may cause kernel raw socket buffer saturation
-* Monitor CPU usage and adjust accordingly - more workers ≠ always better
-* Monitor with `htop` or `top`
-* Network latency affects optimal worker count
-
-### InfluxDB Settings
-
-```yaml
-influxdb:
-  # InfluxDB v2 server URL
-  # Docker default: "http://localhost:8086" (host network mode)
-  # Native default: "http://localhost:8086" (assumes local InfluxDB)
-  url: "http://localhost:8086"
-  
-  # API authentication token (uses environment variable expansion)
-  # Docker: Set in docker-compose.yml or .env file
-  # Native: Set in /opt/netscan/.env file
-  token: "${INFLUXDB_TOKEN}"
-  
-  # Organization name (uses environment variable expansion)
-  # Docker default: "test-org"
-  # Native: Your organization name
-  org: "${INFLUXDB_ORG}"
-  
-  # Bucket for metrics storage
-  # Default: "netscan"
-  bucket: "netscan"
-  
-  # Bucket for health metrics storage
-  # Default: "health"
-  health_bucket: "health"
-  
-  # Batch write settings for performance
-  # Number of points to accumulate before writing
-  # Default: 5000 (high-performance deployments)
-  # Range: 10-10000
-  batch_size: 5000
-  
-  # Maximum time to hold points before flushing
-  # Default: "5s"
-  # Range: "1s"-"60s"
-  flush_interval: "5s"
-```
-
-**Batching Notes:**
-* Batching reduces InfluxDB requests by ~99% for large deployments
-* Larger batch_size reduces request frequency but increases memory usage
-* Shorter flush_interval reduces data lag but increases request frequency
-* Default (5000 points, 5s) optimized for high-performance servers with 10,000+ devices
-* For small deployments (100-1000 devices), consider batch_size: 100
-
-**InfluxDB Schema:**
-* Measurement: `ping` (primary bucket)
-  * Tags: `ip`, `hostname`
-  * Fields: `rtt_ms` (float64), `success` (bool)
-* Measurement: `device_info` (primary bucket)
-  * Tags: `ip`
-  * Fields: `hostname` (string), `snmp_description` (string)
-* Measurement: `health_metrics` (health bucket)
-  * Tags: none
-  * Fields: `device_count` (int), `active_pingers` (int), `goroutines` (int), `memory_mb` (int), `rss_mb` (int), `influxdb_ok` (bool), `influxdb_successful_batches` (uint64), `influxdb_failed_batches` (uint64)
-  * Note: `memory_mb` is Go heap allocation (runtime.MemStats.Alloc), `rss_mb` is OS-level resident set size (Linux /proc/self/status VmRSS)
-  * Note: `active_pingers` measures concurrent in-flight ping operations (typically 1-5 in healthy networks), not total managed devices
-
-### Health Check Endpoint
-
-```yaml
-# HTTP server port for health check endpoints
-# Default: 8080
-# Used by Docker HEALTHCHECK and Kubernetes probes
-health_check_port: 8080
-
-# Interval for writing health metrics to InfluxDB health bucket
-# Default: "10s"
-# Health metrics include device count, memory usage, goroutines, InfluxDB stats
-health_report_interval: "10s"
-```
-
-**Endpoints:**
-* `GET /health` - Detailed JSON status (device count, suspended devices, memory, goroutines, InfluxDB stats)
-* `GET /health/ready` - Readiness probe (200 if InfluxDB OK, 503 if unavailable)
-* `GET /health/live` - Liveness probe (200 if application running)
-
-**Health JSON Response Fields:**
-* `status` (string) - Overall health: "healthy", "degraded", or "unhealthy"
-* `version` (string) - Application version
-* `uptime` (string) - Human-readable uptime since startup
-* `device_count` (int) - Total number of monitored devices
-* `suspended_devices` (int) - Number of devices currently suspended by circuit breaker
-* `active_pingers` (int) - Number of concurrent in-flight ping operations
-  * **IMPORTANT:** This metric represents the number of ping operations currently executing (concurrent in-flight pings), **NOT** the total number of managed devices.
-  * The value is calculated using Little's Law: `L = λ × W` where:
-    * `L` = concurrent in-flight pings (this metric)
-    * `λ` = ping rate (capped by `ping_rate_limit`, default 64 pps)
-    * `W` = average ping duration (RTT for successful pings, or `ping_timeout` for failing pings)
-  * **Healthy Network Example:** With 360 devices, `ping_rate_limit: 64` pps, and 15ms average RTT:
-    * Expected `active_pingers` ≈ 64 × 0.015 = **~1 concurrent ping**
-    * This is normal! Pings complete quickly, so only 1-2 are in-flight at any moment.
-  * **Failing Network Example:** If 10% of devices timeout at 7 seconds:
-    * Average duration: (0.9 × 0.015s) + (0.1 × 7s) = 0.7135s
-    * Expected `active_pingers` ≈ 64 × 0.7135 = **~46 concurrent pings**
-  * **Key Insight:** Low values (1-5) indicate a **healthy network** with fast responses. High values (50+) indicate network problems with timeouts.
-  * The `ping_timeout` setting only affects **failing** pings; it does not represent typical ping duration in a healthy network.
-* `influxdb_ok` (bool) - InfluxDB connectivity status
-* `influxdb_successful` (uint64) - Successful batch writes to InfluxDB
-* `influxdb_failed` (uint64) - Failed batch writes to InfluxDB
-* `pings_sent_total` (uint64) - Total number of monitoring pings sent since application startup
-  * **IMPORTANT:** This is a **monotonically increasing counter**, not a rate. It counts **all monitoring pings** sent (successful and failed).
-  * This counter only increments for **continuous monitoring pings** (from active pingers), **NOT** discovery pings.
-  * **Little's Law Relationship:** This metric represents the ping rate (λ) when used with time-series analysis:
-    * `active_pingers` = L (concurrent in-flight pings at any moment)
-    * `pings_sent_total` = cumulative count used to calculate λ (ping rate in pings/second)
-    * Together, these metrics allow you to validate Little's Law: `L = λ × W`
-  * **Calculating Ping Rate in InfluxDB/Grafana:**
-    * To see pings per second, apply the `derivative(1s)` function in InfluxDB queries
-    * In Grafana, use the "Non-negative derivative" transformation with "1s" unit
-    * Example query: `from(bucket: "health") |> range(start: -1h) |> filter(fn: (r) => r._field == "pings_sent_total") |> derivative(unit: 1s, nonNegative: true)`
-  * **Use Cases:**
-    * Verify actual ping rate matches configured `ping_rate_limit`
-    * Detect if rate limiting is working correctly (rate should plateau at limit)
-    * Monitor long-term ping throughput trends
-    * Calculate average network latency using Little's Law: `W = L / λ`
-* `goroutines` (int) - Current goroutine count
-* `memory_mb` (uint64) - Go heap allocation in MB
-* `rss_mb` (uint64) - OS-level resident set size in MB
-* `timestamp` (time) - Current timestamp
-
-**Health Metrics Persistence:**
-* Health metrics are automatically written to the health bucket at the configured interval
-* Metrics include: device count, suspended devices, active pingers, pings sent total, goroutines, memory usage, InfluxDB status
-* Separate bucket prevents health metrics from mixing with device monitoring data
-* Useful for long-term application health tracking and alerting
-
-**Docker Integration:**
-* HEALTHCHECK directive in Dockerfile uses `/health/live`
-* docker-compose.yml healthcheck uses wget on `/health/live`
-
-**Kubernetes Integration:**
-* Configure livenessProbe with `/health/live`
-* Configure readinessProbe with `/health/ready`
-
-### Resource Protection Settings
-
-```yaml
-# Maximum number of concurrent pinger goroutines
-# Default: 20000 (high-performance servers)
-# Prevents goroutine exhaustion
-max_concurrent_pingers: 20000
-
-# Maximum number of devices to monitor
-# Default: 20000 (high-performance servers)
-# When limit reached, oldest devices (by LastSeen) are evicted (LRU)
-max_devices: 20000
-
-# Minimum interval between discovery scans (rate limiting)
-# Default: "1m"
-# Prevents accidental tight loops
-min_scan_interval: "1m"
-
-# Memory usage warning threshold in MB
-# Default: 16384 (16GB, high-performance servers)
-# Logs warning when exceeded, does not stop service
-memory_limit_mb: 16384
-```
-
-**Notes:**
-* Resource limits prevent accidental DoS and resource exhaustion
-* Memory baseline: ~50MB + ~1KB per device
-* Adjust limits based on your hardware and network size
-* High-performance defaults support up to 20,000 devices with 16GB RAM
-* For small deployments, consider: max_devices: 1000, max_concurrent_pingers: 1000, memory_limit_mb: 512
-
-### Complete Example
-
-```yaml
-# Network Discovery
-networks:
-  - "192.168.1.0/24"
-  - "10.0.50.0/24"
-icmp_discovery_interval: "5m"
-snmp_daily_schedule: "02:00"
-
-# SNMP
-snmp:
-  community: "${SNMP_COMMUNITY}"
-  port: 161
-  timeout: "5s"
-  retries: 1
-
-# Monitoring
-ping_interval: "2s"
-ping_timeout: "3s"
-
-# Performance
-icmp_workers: 64
-snmp_workers: 32
-
-# InfluxDB
-influxdb:
-  url: "http://localhost:8086"
-  token: "${INFLUXDB_TOKEN}"
-  org: "${INFLUXDB_ORG}"
-  bucket: "netscan"
-  batch_size: 5000
-  flush_interval: "5s"
-
-# Health Check
-health_check_port: 8080
-
-# Resource Limits
-max_concurrent_pingers: 20000
-max_devices: 20000
-min_scan_interval: "1m"
-memory_limit_mb: 16384
-```
-
-### Environment Variables Reference
-
-These environment variables are used in config.yml via `${VAR_NAME}` syntax:
-
-**Docker Deployment (via docker-compose.yml or .env file):**
+**Solution:**
 ```bash
-INFLUXDB_TOKEN=netscan-token              # InfluxDB API token
-INFLUXDB_ORG=test-org                     # InfluxDB organization
-SNMP_COMMUNITY=public                     # SNMPv2c community string
-DOCKER_INFLUXDB_INIT_USERNAME=admin       # InfluxDB admin username
-DOCKER_INFLUXDB_INIT_PASSWORD=admin123    # InfluxDB admin password
-DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=netscan-token  # Same as INFLUXDB_TOKEN
+# Check InfluxDB is running
+curl http://localhost:8086/health
+
+# Verify token in .env file
+sudo cat /opt/netscan/.env
+
+# Test connectivity
+curl -H "Authorization: Token YOUR_TOKEN" \
+  http://localhost:8086/api/v2/buckets
+
+# Update .env if needed
+sudo nano /opt/netscan/.env
+
+# Restart
+sudo systemctl restart netscan
 ```
 
-**Native Deployment (via /opt/netscan/.env file):**
+#### Issue: High CPU or memory usage
+
+**Cause:** Monitoring too many devices or aggressive intervals.
+
+**Solution:**
 ```bash
-INFLUXDB_URL=http://localhost:8086        # InfluxDB server URL
-INFLUXDB_TOKEN=<your-token>               # InfluxDB API token
-INFLUXDB_ORG=<your-org>                   # InfluxDB organization
-INFLUXDB_BUCKET=netscan                   # InfluxDB bucket
-SNMP_COMMUNITY=<your-community>           # SNMPv2c community string
+# Check metrics
+curl http://localhost:8080/health
+
+# Adjust config.yml:
+# - Increase ping_interval
+# - Reduce networks scope
+# - Lower icmp_workers/snmp_workers
+# - Adjust ping_rate_limit
+
+sudo nano /opt/netscan/config.yml
+sudo systemctl restart netscan
 ```
 
-**Security Best Practices:**
-* Never commit `.env` files to version control
-* Use `chmod 600 .env` to restrict permissions
-* Generate strong, unique tokens: `openssl rand -base64 32`
-* Change SNMP community from default "public"
-* Rotate credentials regularly
+### Maintenance
 
----
-
-## License
-
-MIT License - See LICENSE.md
-
----
-
-# Part II: Development Guide
-
-## Architecture Overview
-
-netscan uses a decoupled, multi-ticker architecture with four independent concurrent event loops orchestrated in `cmd/netscan/main.go`:
-
-### High-Level Design
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                       Main Process                          │
-│                                                             │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │
-│  │   Ticker 1  │  │   Ticker 2  │  │   Ticker 3  │       │
-│  │    ICMP     │  │   Daily     │  │   Pinger    │       │
-│  │  Discovery  │  │   SNMP      │  │Reconciliation│       │
-│  │   (5 min)   │  │  (02:00)    │  │   (5 sec)   │       │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘       │
-│         │                │                │               │
-│         └────────────────┴────────────────┘               │
-│                          │                                │
-│                  ┌───────▼────────┐                       │
-│                  │  StateManager  │ (Single Source)       │
-│                  │  Thread-Safe   │                       │
-│                  └───────┬────────┘                       │
-│                          │                                │
-│         ┌────────────────┼────────────────┐               │
-│         │                │                │               │
-│    ┌────▼────┐     ┌────▼────┐    ┌─────▼─────┐         │
-│    │ Pinger  │     │ Pinger  │    │  Pinger   │   ...   │
-│    │Device 1 │     │Device 2 │    │  Device N │         │
-│    └────┬────┘     └────┬────┘    └─────┬─────┘         │
-│         │                │                │               │
-│         └────────────────┴────────────────┘               │
-│                          │                                │
-│                  ┌───────▼────────┐                       │
-│                  │ InfluxDB Writer│ (Batched)             │
-│                  │  Background    │                       │
-│                  │   Flusher      │                       │
-│                  └────────────────┘                       │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Component Interaction
-
-1. **ICMP Discovery Ticker (every 5m):**
-   * Performs concurrent ICMP ping sweep across all configured networks
-   * Returns list of responsive IPs
-   * For each new device: Add to StateManager, trigger immediate SNMP scan
-   * For existing devices: Updates are handled by continuous pingers
-
-2. **Daily SNMP Scan Ticker (at 02:00):**
-   * Retrieves all device IPs from StateManager
-   * Performs concurrent SNMP queries for hostname and sysDescr
-   * Updates StateManager with enriched metadata
-   * Writes device_info measurements to InfluxDB
-
-3. **Pinger Reconciliation Ticker (every 5s):**
-   * Compares StateManager device list with activePingers map
-   * Starts pinger goroutines for new devices
-   * Stops pinger goroutines for removed devices
-   * Ensures 1:1 mapping between devices and pingers
-
-4. **State Pruning Ticker (every 1h):**
-   * Removes devices not seen in last 24 hours from StateManager
-   * Reconciliation ticker automatically stops their pingers
-
-5. **Continuous Pingers (one per device):**
-   * Dedicated goroutine pinging single device at configured interval (default: 2s)
-   * Writes ping measurements to InfluxDB (batched)
-   * Updates LastSeen timestamp in StateManager on successful ping
-   * Runs until device removed or context cancelled
-
-### Data Flow
-
-**Discovery Flow:**
-```
-Network Range → ICMP Sweep → Responsive IPs → StateManager.AddDevice()
-                                                      ↓
-                                              Trigger SNMP Scan
-                                                      ↓
-                                    StateManager.UpdateDeviceSNMP(hostname, sysDescr)
-                                                      ↓
-                                         InfluxDB.WriteDeviceInfo()
-```
-
-**Monitoring Flow:**
-```
-Device → Pinger Goroutine → ICMP Ping (2s interval)
-                                  ↓
-                            Success/Failure
-                                  ↓
-                    ┌─────────────┴─────────────┐
-                    ▼                           ▼
-        StateManager.UpdateLastSeen()   InfluxDB.WritePingResult()
-                                              (batched)
-```
-
-### Concurrency Model
-
-* **Ticker Orchestration:** All tickers run in main select loop, non-blocking
-* **Worker Pools:** ICMP discovery and SNMP scans use configurable worker pools
-* **Pinger Goroutines:** One long-running goroutine per device
-* **Mutex Protection:** StateManager and activePingers map protected with mutex
-* **WaitGroup Tracking:** All pinger goroutines tracked for graceful shutdown
-* **Context Cancellation:** Shutdown signal propagates via context to all goroutines
-
-### Thread Safety
-
-* **StateManager:** RWMutex protects all device map operations
-* **activePingers map:** Mutex protects all pinger lifecycle operations (start/stop)
-* **InfluxDB Writer:** Lock-free channel-based batching
-* **No Shared State:** Pingers only access their own device struct and interfaces
-
-### Performance Characteristics
-
-* **Memory:** ~50MB baseline + ~1KB per device
-* **Goroutines:** ~8 (framework) + N (pingers) + 2×workers (discovery/SNMP)
-* **InfluxDB Requests:** Batched (100 points or 5s), ~99% reduction vs. unbatched
-* **Network Load:** Configurable via worker counts and intervals
-* **CPU Load:** Mostly idle, spikes during discovery/SNMP scans
-
----
-
-## Development Setup
-
-### Prerequisites
-
-* **Go:** Version 1.25.1 or later
-* **Docker:** For integration testing (optional)
-* **InfluxDB:** v2.7+ for testing (optional, can use Docker)
-* **Git:** For version control
-* **Network Access:** To actual network devices for realistic testing
-
-### Clone Repository
+#### Updating netscan
 
 ```bash
-git clone https://github.com/kljama/netscan.git
-cd netscan
-```
+# 1. Stop service
+sudo systemctl stop netscan
 
-### Install Dependencies
+# 2. Backup current binary and config
+sudo cp /opt/netscan/netscan /opt/netscan/netscan.backup
+sudo cp /opt/netscan/config.yml /opt/netscan/config.yml.backup
 
-```bash
-go mod download
-```
+# 3. Pull latest code
+cd /path/to/netscan
+git pull origin main
 
-This downloads all dependencies specified in go.mod:
-* gopkg.in/yaml.v3 v3.0.1
-* github.com/gosnmp/gosnmp v1.42.1
-* github.com/prometheus-community/pro-bing v0.7.0
-* github.com/influxdata/influxdb-client-go/v2 v2.14.0
-* github.com/rs/zerolog v1.34.0
-
-### IDE Setup
-
-**VS Code (Recommended):**
-1. Install Go extension
-2. Configure gopls (Go language server) in settings.json:
-   ```json
-   {
-     "go.useLanguageServer": true,
-     "gopls": {
-       "analyses": {
-         "unusedparams": true,
-         "shadow": true
-       },
-       "staticcheck": true
-     }
-   }
-   ```
-
-**GoLand/IntelliJ IDEA:**
-1. Install Go plugin
-2. Enable gofmt on save
-3. Enable go vet on save
-
-### Environment Setup for Development
-
-Create `.env` file for testing:
-```bash
-cp .env.example .env
-```
-
-Edit values for your test environment. For local development with Docker InfluxDB:
-```bash
-INFLUXDB_TOKEN=test-token
-INFLUXDB_ORG=test-org
-INFLUXDB_BUCKET=netscan
-SNMP_COMMUNITY=public
-```
-
-### Start Test InfluxDB (Optional)
-
-```bash
-# Start only InfluxDB from docker-compose
-docker compose up -d influxdb
-
-# Or use standalone InfluxDB container
-docker run -d -p 8086:8086 \
-  -e DOCKER_INFLUXDB_INIT_MODE=setup \
-  -e DOCKER_INFLUXDB_INIT_USERNAME=admin \
-  -e DOCKER_INFLUXDB_INIT_PASSWORD=admin123 \
-  -e DOCKER_INFLUXDB_INIT_ORG=test-org \
-  -e DOCKER_INFLUXDB_INIT_BUCKET=netscan \
-  -e DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=test-token \
-  influxdb:2.7
-```
-
----
-
-## Building
-
-### Standard Build
-
-```bash
-# Build for current platform
+# 4. Rebuild
 go build -o netscan ./cmd/netscan
 
-# Run
-./netscan -config config.yml
+# 5. Install new binary
+sudo cp netscan /opt/netscan/
+
+# 6. Reset capability (lost during copy)
+sudo setcap cap_net_raw+ep /opt/netscan/netscan
+
+# 7. Check for config changes
+diff config.yml.example /opt/netscan/config.yml
+
+# 8. Update config if needed
+sudo nano /opt/netscan/config.yml
+
+# 9. Restart
+sudo systemctl start netscan
+
+# 10. Verify
+sudo systemctl status netscan
+sudo journalctl -u netscan -f
 ```
 
-### Build with Optimizations (Production)
+#### Log Rotation
+
+systemd journal handles log rotation automatically, but you can configure retention:
 
 ```bash
-# Static binary with symbols stripped
-CGO_ENABLED=0 go build \
-  -ldflags="-w -s" \
-  -o netscan \
-  ./cmd/netscan
+# Check current journal size
+sudo journalctl --disk-usage
 
-# Result: Smaller binary, no debug symbols
-```
+# Configure retention in /etc/systemd/journald.conf:
+# SystemMaxUse=1G
+# SystemKeepFree=2G
+# MaxRetentionSec=1month
 
-### Cross-Compilation
-
-```bash
-# For linux-amd64 (from any platform)
-GOOS=linux GOARCH=amd64 go build -o netscan-linux-amd64 ./cmd/netscan
-
-# Note: netscan officially supports linux-amd64 only
-# ARM and other architectures are deferred to future releases
-```
-
-### Docker Build
-
-```bash
-# Build image
-docker build -t netscan:local .
-
-# Or use docker compose
-docker compose build netscan
-```
-
-### Using build.sh Script
-
-```bash
-# Simple build script
-./build.sh
-```
-
-This creates `netscan` binary in current directory.
-
----
-
-## Testing
-
-### Run All Tests
-
-```bash
-# Run all tests with verbose output
-go test -v ./...
-
-# Run with race detection (RECOMMENDED for development)
-go test -race ./...
-
-# Run with coverage
-go test -cover ./...
-
-# Generate coverage HTML report
-go test -coverprofile=coverage.out ./...
-go tool cover -html=coverage.out -o coverage.html
-```
-
-### Run Specific Package Tests
-
-```bash
-# Test configuration package
-go test -v ./internal/config
-
-# Test state manager
-go test -v ./internal/state
-
-# Test orchestration
-go test -v ./cmd/netscan
-
-# Test with race detection
-go test -race ./internal/state
-```
-
-### Run Specific Test Functions
-
-```bash
-# Run single test
-go test -v ./cmd/netscan -run TestPingerReconciliation
-
-# Run tests matching pattern
-go test -v ./cmd/netscan -run TestDaily
-
-# Run benchmark
-go test -v ./cmd/netscan -run ^$ -bench BenchmarkPingerReconciliation
-```
-
-### Test Suite Overview
-
-**Unit Tests:**
-* `internal/config/config_test.go` - Configuration parsing and validation
-* `internal/state/manager_test.go` - Device state management
-* `internal/state/manager_concurrent_test.go` - Concurrency and race conditions
-* `internal/discovery/scanner_test.go` - ICMP and SNMP scanning
-* `internal/influx/writer_test.go` - InfluxDB write operations
-* `internal/influx/writer_validation_test.go` - Data sanitization
-* `internal/monitoring/pinger_test.go` - Continuous ping monitoring
-
-**Integration Tests:**
-* `cmd/netscan/orchestration_test.go` - Multi-ticker orchestration (11 tests, 1 benchmark)
-
-### Test Quality Requirements
-
-All tests must:
-* Pass without errors: `go test ./...`
-* Pass race detection: `go test -race ./...`
-* Execute in <2 seconds total
-* Not depend on external services (use mocks/fakes)
-* Not depend on specific timing (avoid time.Sleep() in assertions)
-
-### Benchmarking
-
-```bash
-# Run all benchmarks
-go test -bench=. ./...
-
-# Run specific benchmark
-go test -bench=BenchmarkPingerReconciliation ./cmd/netscan
-
-# With memory allocation stats
-go test -bench=. -benchmem ./...
-
-# Multiple runs for statistical significance
-go test -bench=. -benchtime=10s -count=5 ./...
+# Manually clean old logs
+sudo journalctl --vacuum-time=7d
+sudo journalctl --vacuum-size=500M
 ```
 
 ---
 
-## Code Quality
+**End of Part I: Deployment Guide**
 
-### Formatting
-
-```bash
-# Format all code (automatic)
-go fmt ./...
-
-# Check if formatting needed
-gofmt -l .
-```
-
-### Static Analysis
-
-```bash
-# Run go vet
-go vet ./...
-
-# Install and run staticcheck (recommended)
-go install honnef.co/go/tools/cmd/staticcheck@latest
-staticcheck ./...
-```
-
-### Linting
-
-```bash
-# Install golangci-lint
-go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-
-# Run linter
-golangci-lint run
-
-# Run with auto-fix
-golangci-lint run --fix
-```
-
-### Dependency Management
-
-```bash
-# Add new dependency
-go get github.com/some/package
-
-# Update dependency
-go get -u github.com/some/package
-
-# Update all dependencies
-go get -u ./...
-
-# Clean up unused dependencies
-go mod tidy
-
-# Verify dependencies
-go mod verify
-
-# Check for vulnerabilities
-go install golang.org/x/vuln/cmd/govulncheck@latest
-govulncheck ./...
-```
-
----
-
-## Contribution Guidelines
-
-### Development Workflow
-
-1. **Fork Repository:** Fork kljama/netscan to your GitHub account
-2. **Clone Fork:** `git clone https://github.com/YOUR-USERNAME/netscan.git`
-3. **Create Branch:** `git checkout -b feature/your-feature-name`
-4. **Make Changes:** Follow coding standards below
-5. **Test Changes:** Run all tests with race detection
-6. **Commit:** Use conventional commit messages
-7. **Push:** `git push origin feature/your-feature-name`
-8. **Pull Request:** Create PR against main branch
-
-### Coding Standards
-
-**General:**
-* Follow Go official style guide
-* Use `gofmt` for formatting
-* Pass `go vet` and `staticcheck`
-* Document exported functions/types with godoc comments
-* Write tests for new code (target: >80% coverage)
-* Run `go test -race` before committing
-
-**Naming Conventions:**
-* Packages: lowercase, single word (e.g., `discovery`, `state`)
-* Files: lowercase, underscore-separated (e.g., `scanner.go`, `manager_test.go`)
-* Types: PascalCase (e.g., `StateManager`, `Device`)
-* Functions: camelCase for private, PascalCase for exported
-* Constants: PascalCase for exported, camelCase for private
-* Variables: camelCase (avoid single-letter except loop counters)
-
-**Error Handling:**
-* Always check errors (no `err` variable unused)
-* Use structured logging for errors with context
-* Return errors, don't panic (except for truly unrecoverable errors)
-* Wrap errors with context: `fmt.Errorf("operation failed: %w", err)`
-
-**Concurrency:**
-* Always protect shared state with mutex
-* Use channels for communication, not shared memory
-* Add `defer recover()` to all goroutines
-* Use WaitGroups to track goroutine lifecycle
-* Document thread-safety guarantees in godoc
-
-**Logging:**
-* Use zerolog structured logging
-* Include context fields (IP, device count, duration, etc.)
-* Log levels: Fatal (startup failures), Error (actionable issues), Warn (degraded state), Info (major operations), Debug (verbose details)
-* Never log in hot paths (inside tight loops)
-
-### Commit Message Format
-
-Use conventional commits:
-
-```
-<type>(<scope>): <subject>
-
-<body>
-
-<footer>
-```
-
-**Types:**
-* `feat`: New feature
-* `fix`: Bug fix
-* `docs`: Documentation changes
-* `style`: Code style changes (formatting, no logic change)
-* `refactor`: Code refactoring
-* `perf`: Performance improvements
-* `test`: Adding/updating tests
-* `chore`: Maintenance tasks (dependencies, build, etc.)
-
-**Examples:**
-```
-feat(discovery): add IPv6 ICMP sweep support
-
-Implements IPv6 address expansion and ping for dual-stack networks.
-Adds configuration option ipv6_enabled (default: false).
-
-Closes #42
-```
-
-```
-fix(influx): prevent data loss on batch flush failure
-
-Retry failed batches up to 3 times with exponential backoff
-before discarding. Log all discarded points for manual recovery.
-
-Fixes #156
-```
-
-### Pull Request Requirements
-
-**Before Submitting:**
-* [ ] All tests pass: `go test ./...`
-* [ ] Race detection clean: `go test -race ./...`
-* [ ] Code formatted: `go fmt ./...`
-* [ ] No vet issues: `go vet ./...`
-* [ ] Documentation updated (README, godoc comments)
-* [ ] Commit messages follow conventional commits
-* [ ] Branch is up-to-date with main
-
-**PR Description Must Include:**
-* Summary of changes
-* Motivation and context
-* Related issue numbers (if applicable)
-* Testing performed
-* Screenshots (if UI changes, though netscan has no UI)
-* Breaking changes (if any)
-
-**Review Process:**
-* Maintainer reviews code
-* CI/CD pipeline runs (tests, security scans, Docker build)
-* At least one approval required
-* Squash and merge to main
-
-### Branching Strategy
-
-* `main` - Stable, production-ready code
-* `feature/*` - New features
-* `fix/*` - Bug fixes
-* `docs/*` - Documentation changes
-* `release/*` - Release preparation
-
-### Versioning
-
-Project follows Semantic Versioning (SemVer):
-* MAJOR: Breaking changes
-* MINOR: New features (backward-compatible)
-* PATCH: Bug fixes (backward-compatible)
-
----
-
-## Project Dependencies
-
-Comprehensive list of all dependencies with purpose explanations.
-
-### Primary Dependencies (Direct)
-
-**1. gopkg.in/yaml.v3 v3.0.1**
-* **Purpose:** YAML configuration file parsing
-* **Usage:** `config.LoadConfig()` in `internal/config/config.go`
-* **License:** Apache-2.0 / MIT
-* **Why Chosen:** Standard YAML library for Go, well-maintained
-
-**2. github.com/gosnmp/gosnmp v1.42.1**
-* **Purpose:** SNMPv2c protocol implementation
-* **Usage:** SNMP queries in `internal/discovery/scanner.go`
-* **License:** BSD-2-Clause
-* **Why Chosen:** Native Go implementation, no CGO, good device compatibility
-
-**3. github.com/prometheus-community/pro-bing v0.7.0**
-* **Purpose:** ICMP ping implementation with raw socket support
-* **Usage:** Ping operations in `internal/discovery/scanner.go` and `internal/monitoring/pinger.go`
-* **License:** MIT
-* **Why Chosen:** Fork of go-ping with better raw socket support, active maintenance
-
-**4. github.com/influxdata/influxdb-client-go/v2 v2.14.0**
-* **Purpose:** InfluxDB v2 client library
-* **Usage:** Time-series data writes in `internal/influx/writer.go`
-* **License:** MIT
-* **Why Chosen:** Official InfluxDB client, non-blocking WriteAPI, batching support
-
-**5. github.com/rs/zerolog v1.34.0**
-* **Purpose:** Zero-allocation structured logging
-* **Usage:** All logging throughout application via `internal/logger/logger.go`
-* **License:** MIT
-* **Why Chosen:** Fastest structured logger, JSON output, zero allocations
-
-### Transitive Dependencies (Indirect)
-
-**github.com/apapsch/go-jsonmerge/v2 v2.0.0**
-* Required by: influxdb-client-go
-* Purpose: JSON merging for InfluxDB API
-
-**github.com/google/uuid v1.6.0**
-* Required by: pro-bing
-* Purpose: Generate unique identifiers for ICMP packets
-
-**github.com/influxdata/line-protocol v0.0.0-20200327222509-2487e7298839**
-* Required by: influxdb-client-go
-* Purpose: InfluxDB line protocol encoding
-
-**github.com/mattn/go-colorable v0.1.13**
-* Required by: zerolog
-* Purpose: Colored console output (Windows compatibility)
-
-**github.com/mattn/go-isatty v0.0.19**
-* Required by: zerolog
-* Purpose: Detect terminal for colored output
-
-**github.com/oapi-codegen/runtime v1.0.0**
-* Required by: influxdb-client-go
-* Purpose: OpenAPI runtime for InfluxDB API
-
-**golang.org/x/net v0.38.0**
-* Required by: pro-bing, influxdb-client-go
-* Purpose: Network primitives (ICMP, HTTP/2)
-
-**golang.org/x/sync v0.13.0**
-* Required by: pro-bing
-* Purpose: Extended synchronization primitives
-
-**golang.org/x/sys v0.31.0**
-* Required by: Multiple packages
-* Purpose: System calls (raw sockets, capabilities)
-
-### System Dependencies
-
-**Linux Capabilities:**
-* CAP_NET_RAW - Required for raw ICMP sockets
-* Set via: `setcap cap_net_raw+ep /path/to/binary` (native) or container runs as root (Docker)
-
-**Runtime Requirements:**
-* Linux kernel 3.10+ (for capabilities support)
-* glibc or musl (Alpine uses musl)
-
----
-
-
----
-
-# Part III: Reference Documentation
-
-## File & Directory Structure
-
-Complete reference documenting every file and directory in the repository.
-
-### Root Directory Files
-
-**`.dockerignore`**
-* Purpose: Specifies files/directories excluded from Docker build context
-* Excludes: Documentation (*.md), tests (*_test.go), git metadata (.git/, .github/), build artifacts
-* Why: Reduces Docker build context size, faster builds
-
-**`.env.example`**
-* Purpose: Template for environment variables used by Docker Compose
-* Contains: Placeholders for InfluxDB credentials, SNMP community, org/bucket names
-* Usage: `cp .env.example .env` then edit with actual values
-* Security: .env file is in .gitignore, never commit credentials
-
-**`.gitignore`**
-* Purpose: Git ignore rules to prevent committing sensitive/generated files
-* Excludes: config.yml (credentials), .env (credentials), netscan binary, dist/ (build artifacts), IDE files
-* Why: Prevents accidental credential leaks and keeps repository clean
-
-**`build.sh`**
-* Purpose: Simple build script for netscan binary
-* Usage: `./build.sh`
-* Output: `netscan` binary in current directory
-* Implementation: Calls `go build -o netscan ./cmd/netscan`
-
-**`CHANGELOG.md`**
-* Purpose: Project changelog tracking all releases and changes
-* Format: Keep a Changelog format with semantic versioning
-* Maintenance: Updated with each release
-
-**`cliff.toml`**
-* Purpose: Configuration for git-cliff changelog generator
-* Usage: Automatically generate CHANGELOG.md from git commit history
-* Command: `git cliff -o CHANGELOG.md`
-* Format: Conventional commits parsing
-
-**`config.yml.example`**
-* Purpose: Template configuration file with all available parameters
-* Contains: Network ranges (MUST be updated), SNMP settings, performance tuning, resource limits
-* Usage: `cp config.yml.example config.yml` then edit networks section
-* Security: Contains placeholders for environment variables (${VAR_NAME})
-
-**`deploy.sh`**
-* Purpose: Automated native deployment script for production
-* Target: Systemd-based Linux systems
-* Actions: Creates /opt/netscan/, copies binary/config, creates service user, sets capabilities, installs systemd unit
-* Usage: `sudo ./deploy.sh`
-
-**`docker-compose.yml`**
-* Purpose: Docker Compose stack definition for netscan + InfluxDB
-* Services: netscan (build from Dockerfile), influxdb (InfluxDB v2.7 image)
-* Configuration: Host networking, CAP_NET_RAW capability, health checks, environment variable expansion
-* Usage: `docker compose up -d`
-
-**`Dockerfile`**
-* Purpose: Multi-stage Docker build for netscan
-* Stage 1: golang:1.25-alpine builder (compiles Go binary)
-* Stage 2: alpine:latest runtime (minimal ~15MB image)
-* Security: Creates non-root user but runs as root for ICMP (documented in comments)
-* Features: CAP_NET_RAW capability, HEALTHCHECK directive, optimized binary (-ldflags="-w -s")
-
-**`docker-verify.sh`**
-* Purpose: CI/CD verification script for Docker deployment
-* Actions: Creates test config.yml, starts Docker Compose, waits for health, verifies endpoints, cleanup
-* Usage: Called by .github/workflows/ci-cd.yml
-* Why: Validates complete stack deployment works end-to-end
-
-**`go.mod` & `go.sum`**
-* Purpose: Go module definition and dependency lock file
-* Version: Go 1.25.1
-* Dependencies: yaml.v3, gosnmp, pro-bing, influxdb-client-go, zerolog
-* Maintenance: `go mod tidy` to clean up
-
-**`LICENSE.md`**
-* Purpose: MIT License file
-* Terms: Free use, modification, distribution with attribution
-
-**`undeploy.sh`**
-* Purpose: Complete uninstallation script for native deployment
-* Actions: Stops/disables systemd service, removes /opt/netscan/, deletes service user
-* Usage: `sudo ./undeploy.sh`
-
-### `.github/` Directory
-
-**`.github/copilot-instructions.md`**
-* Purpose: Comprehensive development guide for GitHub Copilot
-* Content: Project architecture, implementation details, coding standards, mandates
-* Audience: AI assistants and developers
-* Maintenance: Updated with each major architectural change
-
-**`.github/workflows/ci-cd.yml`**
-* Purpose: Main CI/CD pipeline for GitHub Actions
-* Triggers: Push to any branch, pull requests
-* Jobs: Go build, unit tests with race detection, security scanning (govulncheck, Trivy), Docker verification
-* Security: Uploads SARIF reports to GitHub Security tab, blocks on HIGH/CRITICAL vulnerabilities
-
-### `cmd/netscan/` Directory
-
-Main application entry point and orchestration logic.
-
-**`cmd/netscan/main.go`** (224 lines)
-* Purpose: Application entry point and multi-ticker orchestration
-* Initialization: Config loading, logging setup, StateManager, InfluxDB writer, health server, signal handling
-* Tickers: ICMP discovery (every 5m), daily SNMP (at 02:00), pinger reconciliation (every 5s), state pruning (every 1h)
-* Shutdown: Graceful shutdown with context cancellation, WaitGroup, batch flush
-* Exports: None (main package)
-
-**`cmd/netscan/health.go`** (130 lines)
-* Purpose: HTTP health check server with three endpoints
-* Endpoints: /health (detailed JSON), /health/ready (readiness probe), /health/live (liveness probe)
-* Exports: `HealthServer` struct, `NewHealthServer()` constructor, `Start()` method
-* Integration: Docker HEALTHCHECK, Kubernetes probes
-
-**`cmd/netscan/orchestration_test.go`** (527 lines)
-* Purpose: Comprehensive integration tests for ticker orchestration
-* Tests: 11 test functions covering daily SNMP scheduling, graceful shutdown, pinger reconciliation, resource limits
-* Benchmark: BenchmarkPingerReconciliation with 1000 devices
-* Coverage: Critical orchestration logic, edge cases, concurrent operation
-
-### `internal/config/` Package
-
-Configuration parsing, validation, and environment variable expansion.
-
-**`internal/config/config.go`** (540 lines)
-* Purpose: YAML configuration parsing with validation and circuit breaker support
-* Structs: `Config`, `SNMPConfig`, `InfluxDBConfig`
-* Config Fields (Circuit Breaker): `PingMaxConsecutiveFails` (int), `PingBackoffDuration` (time.Duration)
-* Functions: `LoadConfig(path)`, `ValidateConfig(cfg)`, validation helpers
-* Features: Environment variable expansion, duration parsing, network range validation, security checks, circuit breaker parameter validation
-* Exports: Config, SNMPConfig, InfluxDBConfig, LoadConfig, ValidateConfig
-
-**`internal/config/config_test.go`**
-* Purpose: Unit tests for configuration parsing and validation
-* Coverage: Valid configs, invalid formats, environment expansion, validation rules
-
-**`internal/config/config_circuitbreaker_test.go`**
-* Purpose: Circuit breaker configuration tests
-* Coverage: Default values, custom values, validation edge cases
-
-**`internal/config/config_ratelimit_test.go`**
-* Purpose: Rate limiting configuration tests
-* Coverage: Default values, custom values, validation warnings
-
-### `internal/discovery/` Package
-
-ICMP discovery and SNMP scanning with concurrent worker pools.
-
-**`internal/discovery/scanner.go`** (819 lines)
-* Purpose: Network device discovery via ICMP and SNMP
-* Functions:
-  * `RunICMPSweep(networks, workers) []string` - Concurrent ICMP ping sweep
-  * `RunSNMPScan(ips, snmpConfig, workers) []Device` - Concurrent SNMP queries
-  * `snmpGetWithFallback()` - SNMP Get with GetNext fallback
-  * `validateSNMPString()` - Handle string/[]byte OctetString types
-* Exports: RunICMPSweep, RunSNMPScan, RunScanIPsOnly (for testing)
-
-**`internal/discovery/scanner_test.go`**
-* Purpose: Unit tests for ICMP and SNMP scanning
-* Coverage: Worker pools, CIDR expansion, SNMP fallback logic, type handling
-
-### `internal/influx/` Package
-
-InfluxDB v2 client with high-performance batching system.
-
-**`internal/influx/writer.go`** (376 lines)
-* Purpose: InfluxDB time-series data writes with batching
-* Struct: `Writer` with channel-based batching, background flusher
-* Functions:
-  * `NewWriter(url, token, org, bucket, batchSize, flushInterval) *Writer` - Constructor
-  * `WritePingResult(ip, rtt, success)` - Queue ping measurement
-  * `WriteDeviceInfo(ip, hostname, description)` - Queue device metadata
-  * `HealthCheck()` - Test InfluxDB connectivity
-  * `Close()` - Graceful shutdown with batch flush
-* Performance: 99% reduction in HTTP requests via batching
-* Exports: Writer, NewWriter
-
-**`internal/influx/writer_test.go`**
-* Purpose: Unit tests for InfluxDB operations
-* Coverage: Batching logic, health checks, error handling, graceful shutdown
-
-**`internal/influx/writer_validation_test.go`**
-* Purpose: Data sanitization and validation tests
-* Coverage: String sanitization, null byte removal, UTF-8 validation, length limits
-
-### `internal/logger/` Package
-
-Centralized structured logging with zerolog.
-
-**`internal/logger/logger.go`** (43 lines)
-* Purpose: Global logger initialization and configuration
-* Functions:
-  * `Setup(debugMode bool)` - Initialize global logger
-  * `Get()` - Return logger with context
-  * `With(key, value)` - Return logger with additional context
-* Features: JSON logs (production), colored console (development), zero allocations
-* Exports: Setup, Get, With
-
-### `internal/monitoring/` Package
-
-Continuous ICMP monitoring with dedicated pinger goroutines.
-
-**`internal/monitoring/pinger.go`** (226 lines)
-* Purpose: Continuous ping monitoring for single device with circuit breaker support
-* Interfaces: `PingWriter`, `StateManager` (for testability, includes circuit breaker methods)
-* Functions:
-  * `StartPinger(ctx, wg, device, interval, timeout, writer, stateMgr, limiter, counter, maxFails, backoff)` - Long-running pinger goroutine
-  * `performPing(...)` - Legacy ping execution (without circuit breaker)
-  * `performPingWithCircuitBreaker(...)` - Ping execution with circuit breaker integration
-  * `validateIPAddress(ip)` - Security validation (prevent loopback, multicast, etc.)
-* Features: Context cancellation, WaitGroup tracking, panic recovery, IP validation, rate limiting, circuit breaker
-* Circuit Breaker: Checks suspension before pinging, reports success/failure to StateManager, logs when circuit trips
-* Exports: PingWriter, StateManager, StartPinger
-
-**`internal/monitoring/pinger_test.go`**
-* Purpose: Unit tests for continuous monitoring
-* Coverage: Pinger lifecycle, context cancellation, error handling, mock interfaces
-
-**`internal/monitoring/pinger_ratelimit_test.go`**
-* Purpose: Rate limiter integration tests
-* Coverage: Token bucket throttling, burst limits, in-flight counter accuracy
-
-**`internal/monitoring/pinger_timer_test.go`**
-* Purpose: Timer behavior tests
-* Coverage: Non-accumulating ping intervals, timer reset, thundering herd prevention
-
-**`internal/monitoring/pinger_timeout_test.go`**
-* Purpose: Timeout parameter validation tests
-* Coverage: Configurable timeouts (not hardcoded), parameter propagation
-
-### `internal/state/` Package
-
-Thread-safe device state management (single source of truth).
-
-**`internal/state/manager.go`** (240 lines)
-* Purpose: Centralized, thread-safe device registry with circuit breaker support
-* Struct: `Device` (IP, Hostname, SysDescr, LastSeen, ConsecutiveFails, SuspendedUntil), `Manager` (devices map, RWMutex, maxDevices)
-* Functions:
-  * `NewManager(maxDevices) *Manager` - Constructor
-  * `Add(device)` - Add device with LRU eviction
-  * `AddDevice(ip) bool` - Add by IP only, returns true if new
-  * `Get(ip) (*Device, bool)` - Retrieve device
-  * `GetAll() []Device` - Return copy of all devices
-  * `GetAllIPs() []string` - Return all IPs
-  * `UpdateLastSeen(ip)` - Refresh timestamp
-  * `UpdateDeviceSNMP(ip, hostname, sysDescr)` - Enrich with SNMP data
-  * `Prune(olderThan) []Device` - Remove stale devices
-  * `Count() int` - Current device count
-  * `ReportPingSuccess(ip)` - Reset circuit breaker state on successful ping
-  * `ReportPingFail(ip, maxFails, backoff) bool` - Increment failure count, suspend if threshold reached
-  * `IsSuspended(ip) bool` - Check if device is currently suspended by circuit breaker
-  * `GetSuspendedCount() int` - Return count of currently suspended devices
-* Thread Safety: All operations protected by RWMutex
-* Circuit Breaker: Per-device failure tracking and automatic suspension
-* Exports: Device, Manager, NewManager, all methods
-
-**`internal/state/manager_test.go`**
-* Purpose: Unit tests for state management
-* Coverage: CRUD operations, LRU eviction, timestamp updates, pruning
-
-**`internal/state/manager_circuitbreaker_test.go`**
-* Purpose: Circuit breaker functionality tests
-* Coverage: Ping success/fail reporting, suspension logic, IsSuspended checks, full lifecycle
-
-**`internal/state/manager_suspended_count_test.go`**
-* Purpose: GetSuspendedCount method tests
-* Coverage: Count accuracy, thread safety, consistency with IsSuspended
-
-**`internal/state/manager_concurrent_test.go`**
-* Purpose: Concurrency and race condition tests
-* Coverage: Concurrent reads/writes, stress testing, race detector validation
-
----
-
-## Code Reference (API Documentation)
-
-Documentation of all exported functions, structs, and interfaces.
-
-### Package: config
-
-**Type: Config**
-```go
-type Config struct {
-    DiscoveryInterval     time.Duration  // Deprecated, use IcmpDiscoveryInterval
-    IcmpDiscoveryInterval time.Duration  // How often to scan for new devices
-    IcmpWorkers           int            // Concurrent ICMP workers for discovery
-    SnmpWorkers           int            // Concurrent SNMP workers
-    Networks              []string       // CIDR ranges to scan
-    SNMP                  SNMPConfig     // SNMP connection parameters
-    PingInterval          time.Duration  // Ping frequency per device
-    PingTimeout           time.Duration  // Timeout for single ping
-    InfluxDB              InfluxDBConfig // InfluxDB connection parameters
-    SNMPDailySchedule     string         // Daily SNMP scan time (HH:MM)
-    HealthCheckPort       int            // HTTP health server port
-    MaxConcurrentPingers  int            // Resource limit
-    MaxDevices            int            // Resource limit with LRU eviction
-    MinScanInterval       time.Duration  // Rate limiting
-    MemoryLimitMB         int            // Memory warning threshold
-}
-```
-
-**Function: LoadConfig**
-```go
-func LoadConfig(path string) (*Config, error)
-```
-Loads YAML configuration file and expands environment variables.
-* Parameters: `path` - Path to config.yml file
-* Returns: Parsed Config struct or error
-* Environment Expansion: `${VAR_NAME}` syntax expanded via os.ExpandEnv()
-
-**Function: ValidateConfig**
-```go
-func ValidateConfig(cfg *Config) (warning string, err error)
-```
-Validates configuration for security and sanity.
-* Parameters: `cfg` - Config struct to validate
-* Returns: Warning string (non-fatal issues), error (fatal issues)
-* Validations: Network ranges, durations, resource limits, SNMPDailySchedule format
-
-### Package: discovery
-
-**Function: RunICMPSweep**
-```go
-func RunICMPSweep(networks []string, workers int) []string
-```
-Performs concurrent ICMP ping sweep across multiple networks.
-* Parameters: `networks` - CIDR ranges, `workers` - Concurrent workers (default: 64)
-* Returns: Slice of IP addresses that responded to ping
-* Worker Pool: Producer-consumer pattern with buffered channels
-* Timeout: 1 second per ping
-
-**Function: RunSNMPScan**
-```go
-func RunSNMPScan(ips []string, snmpConfig *config.SNMPConfig, workers int) []state.Device
-```
-Performs concurrent SNMP queries for device metadata.
-* Parameters: `ips` - IPs to query, `snmpConfig` - SNMP parameters, `workers` - Concurrent workers (default: 32)
-* Returns: Slice of Device structs with SNMP data populated
-* OIDs Queried: sysName (1.3.6.1.2.1.1.5.0), sysDescr (1.3.6.1.2.1.1.1.0)
-* Fallback: Uses snmpGetWithFallback() for device compatibility
-* Error Handling: Non-responsive devices logged, not returned
-
-### Package: influx
-
-**Type: Writer**
-```go
-type Writer struct {
-    client   influxdb2.Client
-    writeAPI api.WriteAPI
-    org      string
-    bucket   string
-    // Batching fields (private)
-}
-```
-
-**Function: NewWriter**
-```go
-func NewWriter(url, token, org, bucket string, batchSize int, flushInterval time.Duration) *Writer
-```
-Creates InfluxDB writer with batching.
-* Parameters: Connection details, batch size (default: 100), flush interval (default: 5s)
-* Returns: Writer instance (does not check health, call HealthCheck() separately)
-* Background: Starts backgroundFlusher() and monitorWriteErrors() goroutines
-
-**Method: WritePingResult**
-```go
-func (w *Writer) WritePingResult(ip string, rtt time.Duration, successful bool) error
-```
-Queues ping measurement to batch (non-blocking).
-* Parameters: `ip` - Device IP, `rtt` - Round-trip time, `successful` - Ping succeeded
-* Measurement: "ping"
-* Tags: ip, hostname
-* Fields: rtt_ms (float64), success (bool)
-
-**Method: WriteDeviceInfo**
-```go
-func (w *Writer) WriteDeviceInfo(ip, hostname, description string) error
-```
-Queues device metadata to batch (non-blocking).
-* Parameters: `ip`, `hostname`, `description` (all sanitized)
-* Measurement: "device_info"
-* Tags: ip
-* Fields: hostname (string), snmp_description (string)
-
-**Method: HealthCheck**
-```go
-func (w *Writer) HealthCheck() error
-```
-Tests InfluxDB connectivity.
-* Returns: nil if connected, error otherwise
-* Usage: Called on startup (fail-fast) and by health endpoint
-
-**Method: Close**
-```go
-func (w *Writer) Close()
-```
-Graceful shutdown with batch flush.
-* Actions: Cancels context, drains batch channel, performs final flush
-
-### Package: logger
-
-**Function: Setup**
-```go
-func Setup(debugMode bool)
-```
-Initializes global zerolog logger.
-* Parameters: `debugMode` - Enable debug level logging
-* Output: JSON (production) or colored console (ENVIRONMENT=development)
-* Levels: Debug, Info, Warn, Error, Fatal
-* Fields: Adds service="netscan" and timestamp to all logs
-
-### Package: monitoring
-
-**Interface: PingWriter**
-```go
-type PingWriter interface {
-    WritePingResult(ip string, rtt time.Duration, successful bool) error
-    WriteDeviceInfo(ip, hostname, sysDescr string) error
-}
-```
-Implemented by: `influx.Writer`
-
-**Interface: StateManager**
-```go
-type StateManager interface {
-    UpdateLastSeen(ip string)
-}
-```
-Implemented by: `state.Manager`
-
-**Function: StartPinger**
-```go
-func StartPinger(ctx context.Context, wg *sync.WaitGroup, device state.Device, 
-                 interval time.Duration, writer PingWriter, stateMgr StateManager)
-```
-Runs continuous ping monitoring for single device.
-* Parameters: Context for cancellation, WaitGroup for tracking, device details, ping interval, writer interface, state manager interface
-* Lifecycle: Runs until context cancelled, decrements WaitGroup on exit
-* Behavior: Pings device at interval, writes results, updates LastSeen on success
-* Error Handling: Logs errors, continues loop (does not exit on failure)
-* Panic Recovery: Protected with defer recover()
-
-### Package: state
-
-**Type: Device**
-```go
-type Device struct {
-    IP       string    // IPv4 address
-    Hostname string    // From SNMP or defaults to IP
-    SysDescr string    // SNMP sysDescr value
-    LastSeen time.Time // Last successful ping timestamp
-}
-```
-
-**Type: Manager**
-```go
-type Manager struct {
-    devices    map[string]*Device // IP -> Device pointer
-    mu         sync.RWMutex       // Thread-safety
-    maxDevices int                // LRU eviction limit
-}
-```
-
-**Function: NewManager**
-```go
-func NewManager(maxDevices int) *Manager
-```
-Creates new state manager.
-* Parameters: `maxDevices` - Maximum devices (default: 10000 if <= 0)
-* Returns: Initialized Manager instance
-
-**Method: AddDevice**
-```go
-func (m *Manager) AddDevice(ip string) bool
-```
-Adds device by IP, returns true if new.
-* Parameters: `ip` - Device IP address
-* Returns: true if device is new, false if already exists
-* LRU Eviction: Removes oldest device if at maxDevices limit
-* Thread-Safe: Uses mutex lock
-
-**Method: UpdateDeviceSNMP**
-```go
-func (m *Manager) UpdateDeviceSNMP(ip, hostname, sysDescr string)
-```
-Enriches device with SNMP metadata.
-* Parameters: `ip` - Device IP, `hostname` - SNMP sysName, `sysDescr` - SNMP sysDescr
-* Side Effects: Updates LastSeen timestamp
-* Thread-Safe: Uses mutex lock
-
-**Method: GetAllIPs**
-```go
-func (m *Manager) GetAllIPs() []string
-```
-Returns slice of all device IPs.
-* Returns: Slice of IP addresses (copy, safe to modify)
-* Thread-Safe: Uses RWMutex read lock
-
-**Method: Prune**
-```go
-func (m *Manager) Prune(olderThan time.Duration) []Device
-```
-Removes devices not seen within duration.
-* Parameters: `olderThan` - Duration threshold (e.g., 24 * time.Hour)
-* Returns: Slice of removed devices
-* Thread-Safe: Uses mutex lock
-
-**Method: Count**
-```go
-func (m *Manager) Count() int
-```
-Returns current device count.
-* Returns: Number of devices in state
-* Thread-Safe: Uses RWMutex read lock
-* Usage: Health endpoint, logging
-
----
-
-## Glossary
-
-**CIDR:** Classless Inter-Domain Routing notation for IP ranges (e.g., 192.168.1.0/24)
-
-**Context:** Go pattern for cancellation signal propagation across goroutines
-
-**Docker Compose:** Tool for defining and running multi-container Docker applications
-
-**Goroutine:** Lightweight thread managed by Go runtime
-
-**InfluxDB:** Time-series database for metrics storage
-
-**LRU:** Least Recently Used eviction policy (oldest device removed first)
-
-**Mutex:** Mutual exclusion lock for thread-safe access to shared data
-
-**RWMutex:** Read-Write mutex allowing multiple readers or single writer
-
-**SNMP:** Simple Network Management Protocol for device monitoring
-
-**SNMPv2c:** SNMP version 2 with community strings (plain-text authentication)
-
-**Ticker:** Go timer that fires at regular intervals
-
-**WaitGroup:** Go synchronization primitive for waiting on goroutines
-
-**Worker Pool:** Pattern with fixed number of workers processing jobs from queue
-
----
-
-## End of Manual
-
-For the latest updates, see:
-* Repository: https://github.com/kljama/netscan
-* Issues: https://github.com/kljama/netscan/issues
-* Pull Requests: https://github.com/kljama/netscan/pulls
-
+*Part II (Development Guide) and Part III (Reference Documentation) will be added in subsequent updates.*
