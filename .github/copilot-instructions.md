@@ -242,3 +242,124 @@ When shutdown signal (SIGINT or SIGTERM) is received, the following sequence exe
 - **`os/signal`** - Signal handling for graceful shutdown
   - `signal.Notify()` - Listens for SIGINT and SIGTERM
   - Triggers context cancellation on signal receipt
+
+---
+
+## Deployment Model
+
+### Docker Deployment (Primary - Recommended)
+
+**Multi-Stage Dockerfile:**
+- **Builder Stage:** Uses `golang:1.25-alpine` as the build environment
+  - Installs build dependencies: `git`, `ca-certificates`
+  - Compiles binary with `CGO_ENABLED=0 GOOS=linux GOARCH=amd64`
+  - Binary stripping via `-ldflags="-w -s"` to minimize size and remove debug symbols
+  
+- **Runtime Stage:** Uses `alpine:latest` for minimal production image
+  - Creates non-root user `netscan` with dedicated group
+  - Copies only the compiled binary from builder stage
+  - Includes config template (`config.yml.example`)
+
+**Runtime Stage Packages:**
+- `ca-certificates` - TLS/SSL certificate validation for HTTPS connections
+- `libcap` - Linux capability management utilities (provides `setcap`)
+- `wget` - HTTP client for health check endpoint testing
+
+**Capabilities:**
+- **Dockerfile:** Sets `cap_net_raw+ep` capability on binary via `setcap cap_net_raw+ep /app/netscan`
+  - `cap_net_raw` - Allows raw ICMP socket creation for ping operations
+  - `+ep` flags - Effective and Permitted capability sets
+- **docker-compose.yml:** Adds `NET_RAW` capability to container via `cap_add: - NET_RAW`
+  - Grants container permission to create raw sockets at runtime
+  - Required for ICMP echo request/reply functionality
+
+**Security Note:**
+- **Runtime User:** Container runs as `root` (non-root user commented out in Dockerfile)
+- **Reason:** Linux kernel security model in containerized environments requires root privileges for raw ICMP socket access, even with `CAP_NET_RAW` capability set
+- **Limitation:** Non-root users cannot create raw ICMP sockets in Docker containers despite capability grants
+- **Comment in Dockerfile:** Lines 48-51 explain this security constraint
+
+**Docker Compose Stack:**
+- **Services:**
+  - `netscan` - Network monitoring application (builds from Dockerfile)
+  - `influxdb` - InfluxDB v2.7 time-series database for metrics storage
+- **Service Dependencies:** `netscan` depends on `influxdb` with `condition: service_healthy`
+
+**Network Mode:**
+- **Configuration:** `network_mode: host` on netscan service
+- **Purpose:** Provides direct access to host network stack for ICMP and SNMP operations
+- **Impact:** Container shares host's network namespace, enabling network device discovery on local subnets
+
+**Configuration:**
+- **Config Mount:** `./config.yml:/app/config.yml:ro` (read-only)
+- **Location:** Config file must exist in same directory as `docker-compose.yml`
+- **Preparation:** Copy from template with `cp config.yml.example config.yml`
+- **Environment Variables:** Loaded from `.env` file for credential management:
+  - `INFLUXDB_TOKEN` (default: `netscan-token`)
+  - `INFLUXDB_ORG` (default: `test-org`)
+  - `SNMP_COMMUNITY` (default: `public`)
+  - `DEBUG` (default: `false`)
+  - `ENVIRONMENT` (default: `development`)
+
+**Health Checks:**
+- **Dockerfile HEALTHCHECK:**
+  - Command: `wget --no-verbose --tries=1 --spider http://localhost:8080/health/live || exit 1`
+  - Interval: 30 seconds
+  - Timeout: 3 seconds
+  - Start period: 40 seconds (grace period for startup)
+  - Retries: 3 consecutive failures before marking unhealthy
+  
+- **docker-compose.yml healthcheck:**
+  - Command: `["CMD", "wget", "--spider", "-q", "http://localhost:8080/health/live"]`
+  - Same timing parameters as Dockerfile
+  - Tests HTTP endpoint at `/health/live` on port 8080
+
+**Log Rotation:**
+- Driver: `json-file`
+- Max size: `10m` per log file
+- Max files: `3` retained files (~30MB total storage)
+
+### Native systemd Deployment (Alternative - Maximum Security)
+
+**Security Model:**
+- **Dedicated System User:**
+  - Creates `netscan` system user via `useradd -r -s /bin/false netscan`
+  - `-r` flag: Creates system account (UID < 1000)
+  - `-s /bin/false`: Disables shell login for security
+  
+- **Capability-Based Security:**
+  - Command: `setcap cap_net_raw+ep /opt/netscan/netscan`
+  - Grants only `CAP_NET_RAW` capability to binary (principle of least privilege)
+  - Eliminates need for full root privileges
+  - Capability persists across executions
+  
+- **Environment File Security:**
+  - Location: `/opt/netscan/.env`
+  - Permissions: `600` (owner read/write only)
+  - Owner: `netscan:netscan` system user
+  - Contains sensitive credentials (InfluxDB token, SNMP community string)
+  - Automatically loaded by systemd service via `EnvironmentFile` directive
+
+**Installation Location:**
+- Base directory: `/opt/netscan/`
+- Binary: `/opt/netscan/netscan`
+- Configuration: `/opt/netscan/config.yml`
+- Environment: `/opt/netscan/.env`
+- Systemd service: `/etc/systemd/system/netscan.service`
+
+**Systemd Service Hardening:**
+The `deploy.sh` script generates a systemd service file with the following security features:
+
+- **`NoNewPrivileges=yes`** - Prevents privilege escalation via setuid/setgid binaries
+- **`PrivateTmp=yes`** - Provides isolated `/tmp` directory (not shared with host)
+- **`ProtectSystem=strict`** - Makes entire filesystem read-only except specific writable paths
+- **`AmbientCapabilities=CAP_NET_RAW`** - Grants only raw socket capability to process
+- **`User=$SERVICE_USER` / `Group=$SERVICE_USER`** - Runs as dedicated non-root `netscan` user
+- **`Restart=always`** - Automatic restart on failure for high availability
+- **`EnvironmentFile=/opt/netscan/.env`** - Securely loads credentials from protected file
+
+**Service Management:**
+- Enable: `systemctl enable netscan`
+- Start: `systemctl start netscan`
+- Status: `systemctl status netscan`
+- Logs: `journalctl -u netscan -f`
