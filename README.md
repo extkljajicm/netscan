@@ -30,12 +30,22 @@ networks:
 
 Use `ip addr` (Linux) or `ipconfig` (Windows) to determine your network range.
 
-**4. Start the Service**
+**4. (Optional) Configure Production Credentials**
+
+For production deployments, create a `.env` file to override default credentials:
+```bash
+cp .env.example .env
+# Edit .env with your secure credentials
+```
+
+See [MANUAL.md](MANUAL.md#3-configure-credentials-optional-but-recommended-for-production) for details.
+
+**5. Start the Service**
 ```bash
 docker compose up -d
 ```
 
-This starts both netscan and InfluxDB v2.7.
+This starts both netscan and InfluxDB v2.7 using default credentials (suitable for testing).
 
 ---
 
