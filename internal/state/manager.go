@@ -2,6 +2,7 @@ package state
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -17,9 +18,10 @@ type Device struct {
 
 // Manager provides thread-safe device state management
 type Manager struct {
-	devices    map[string]*Device // Map IP addresses to device pointers
-	mu         sync.RWMutex       // Protects concurrent access to devices map
-	maxDevices int                // Maximum number of devices to manage
+	devices        map[string]*Device // Map IP addresses to device pointers
+	mu             sync.RWMutex       // Protects concurrent access to devices map
+	maxDevices     int                // Maximum number of devices to manage
+	suspendedCount atomic.Int32       // Cached count of suspended devices (for O(1) reads)
 }
 
 // NewManager creates a new device state manager
@@ -39,8 +41,19 @@ func (m *Manager) Add(device Device) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// If device already exists, just update it
+	// If device already exists, update it
 	if existing, exists := m.devices[device.IP]; exists {
+		// Track suspension state changes for atomic counter
+		wasActivelySuspended := !existing.SuspendedUntil.IsZero() && time.Now().Before(existing.SuspendedUntil)
+		willBeActivelySuspended := !device.SuspendedUntil.IsZero() && time.Now().Before(device.SuspendedUntil)
+		
+		// Update the atomic counter based on state change
+		if !wasActivelySuspended && willBeActivelySuspended {
+			m.suspendedCount.Add(1) // Device became suspended
+		} else if wasActivelySuspended && !willBeActivelySuspended {
+			m.suspendedCount.Add(-1) // Device no longer suspended
+		}
+		
 		*existing = device
 		return
 	}
@@ -59,11 +72,22 @@ func (m *Manager) Add(device Device) {
 			}
 		}
 		if oldestIP != "" {
+			// If the device being evicted was suspended, decrement counter
+			if evictedDev := m.devices[oldestIP]; evictedDev != nil {
+				if !evictedDev.SuspendedUntil.IsZero() && time.Now().Before(evictedDev.SuspendedUntil) {
+					m.suspendedCount.Add(-1)
+				}
+			}
 			delete(m.devices, oldestIP)
 		}
 	}
 
 	// Add the new device
+	// If the new device is actively suspended, increment the counter
+	if !device.SuspendedUntil.IsZero() && time.Now().Before(device.SuspendedUntil) {
+		m.suspendedCount.Add(1)
+	}
+	
 	m.devices[device.IP] = &device
 }
 
@@ -160,9 +184,14 @@ func (m *Manager) Prune(olderThan time.Duration) []Device {
 	defer m.mu.Unlock()
 	var removed []Device
 	cutoff := time.Now().Add(-olderThan)
+	now := time.Now()
 	for ip, dev := range m.devices {
 		if dev.LastSeen.Before(cutoff) {
 			removed = append(removed, *dev)
+			// If the pruned device was actively suspended, decrement counter
+			if !dev.SuspendedUntil.IsZero() && now.Before(dev.SuspendedUntil) {
+				m.suspendedCount.Add(-1)
+			}
 			delete(m.devices, ip)
 		}
 	}
@@ -186,6 +215,11 @@ func (m *Manager) ReportPingSuccess(ip string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if dev, exists := m.devices[ip]; exists {
+		// If SuspendedUntil is set (device was suspended at some point), decrement counter
+		// This handles both active suspensions and expired ones
+		if !dev.SuspendedUntil.IsZero() {
+			m.suspendedCount.Add(-1)
+		}
 		dev.ConsecutiveFails = 0
 		dev.SuspendedUntil = time.Time{} // Zero time (not suspended)
 	}
@@ -208,6 +242,7 @@ func (m *Manager) ReportPingFail(ip string, maxFails int, backoff time.Duration)
 		// Trip the circuit breaker
 		dev.ConsecutiveFails = 0 // Reset counter
 		dev.SuspendedUntil = time.Now().Add(backoff)
+		m.suspendedCount.Add(1) // Increment atomic counter
 		return true // Device is now suspended
 	}
 	
@@ -228,7 +263,16 @@ func (m *Manager) IsSuspended(ip string) bool {
 }
 
 // GetSuspendedCount returns the number of currently suspended devices
+// This uses a cached atomic counter for O(1) performance (optimized for frequent calls)
+// Note: The count may be slightly stale if suspensions have expired but haven't been cleared yet
 func (m *Manager) GetSuspendedCount() int {
+	return int(m.suspendedCount.Load())
+}
+
+// GetSuspendedCountAccurate returns an accurate count by iterating all devices
+// This is O(n) but provides the most up-to-date count including expired suspensions
+// Only use when accuracy is critical (e.g., debugging)
+func (m *Manager) GetSuspendedCountAccurate() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	
