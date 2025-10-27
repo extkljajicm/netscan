@@ -27,13 +27,10 @@ services:
     volumes:
       - ./config.yml:/app/config.yml:ro
     
-    # Load environment variables from .env file (optional)
-    # This file should be created from .env.example: cp .env.example .env
-    # If .env doesn't exist, defaults from environment section below are used
-    env_file:
-      - .env
-    
     # Environment variables for config.yml expansion
+    # Docker Compose automatically loads .env file from project directory if it exists
+    # Create .env file from template: cp .env.example .env
+    # If .env doesn't exist, defaults below are used
     # For production: Create a .env file with these variables to avoid storing credentials here
     # See README.md for details on using .env file
     environment:
@@ -66,11 +63,9 @@ services:
     ports:
       - "8086:8086"
     
-    # Load environment variables from .env file (optional)
-    # If .env doesn't exist, defaults from environment section below are used
-    env_file:
-      - .env
-    
+    # InfluxDB initialization environment variables
+    # Docker Compose automatically loads .env file from project directory if it exists
+    # If .env doesn't exist, defaults below are used
     environment:
       - DOCKER_INFLUXDB_INIT_MODE=${DOCKER_INFLUXDB_INIT_MODE:-setup}
       - DOCKER_INFLUXDB_INIT_USERNAME=${DOCKER_INFLUXDB_INIT_USERNAME:-admin}
