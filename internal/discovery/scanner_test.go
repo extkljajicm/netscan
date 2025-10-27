@@ -32,8 +32,13 @@ func TestIncIP(t *testing.T) {
 
 // TestRunICMPSweepWithRateLimiter verifies that RunICMPSweep respects the rate limiter
 func TestRunICMPSweepWithRateLimiter(t *testing.T) {
+	const (
+		testRateLimit  = 2.0 // 2 pings per second for testing
+		testBurstLimit = 2   // burst of 2
+	)
+	
 	// Create a very restrictive rate limiter: 2 pings per second, burst of 2
-	limiter := rate.NewLimiter(rate.Limit(2.0), 2)
+	limiter := rate.NewLimiter(rate.Limit(testRateLimit), testBurstLimit)
 	
 	// Use a small network to test with
 	networks := []string{"127.0.0.0/30"} // Just 4 IPs: .0, .1, .2, .3
@@ -62,8 +67,13 @@ func TestRunICMPSweepWithRateLimiter(t *testing.T) {
 
 // TestRunICMPSweepContextCancellation verifies that RunICMPSweep respects context cancellation
 func TestRunICMPSweepContextCancellation(t *testing.T) {
+	const (
+		verySlowRateLimit = 0.1 // 1 ping every 10 seconds for testing cancellation
+		testBurstLimit    = 1
+	)
+	
 	// Create a very slow rate limiter to test cancellation
-	limiter := rate.NewLimiter(rate.Limit(0.1), 1) // 1 ping every 10 seconds
+	limiter := rate.NewLimiter(rate.Limit(verySlowRateLimit), testBurstLimit)
 	
 	// Use a network with several IPs
 	networks := []string{"127.0.0.0/29"} // 8 IPs
