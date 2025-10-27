@@ -36,7 +36,7 @@ services:
       - SNMP_COMMUNITY=${SNMP_COMMUNITY:-public}
       
     # Debug mode true|false  
-      - DEBUG=true
+      - DEBUG=false
     # Human friendly console output when set to development  
       - ENVIRONMENT=development
       
