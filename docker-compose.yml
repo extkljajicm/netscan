@@ -27,6 +27,11 @@ services:
     volumes:
       - ./config.yml:/app/config.yml:ro
     
+    # Load environment variables from .env file
+    # This file should be created from .env.example: cp .env.example .env
+    env_file:
+      - .env
+    
     # Environment variables for config.yml expansion
     # For production: Create a .env file with these variables to avoid storing credentials here
     # See README.md for details on using .env file
@@ -59,6 +64,11 @@ services:
     container_name: influxdbv2
     ports:
       - "8086:8086"
+    
+    # Load environment variables from .env file
+    env_file:
+      - .env
+    
     environment:
       - DOCKER_INFLUXDB_INIT_MODE=${DOCKER_INFLUXDB_INIT_MODE:-setup}
       - DOCKER_INFLUXDB_INIT_USERNAME=${DOCKER_INFLUXDB_INIT_USERNAME:-admin}
