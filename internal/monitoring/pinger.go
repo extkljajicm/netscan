@@ -175,6 +175,7 @@ func performPingWithCircuitBreaker(device state.Device, timeout time.Duration, w
 	}
 	
 	// Increment total pings sent counter (for observability)
+	// Note: This tracks continuous monitoring pings only, not ICMP discovery sweeps
 	if totalPingsSent != nil {
 		totalPingsSent.Add(1)
 	}

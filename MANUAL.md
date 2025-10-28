@@ -2214,7 +2214,7 @@ Stores application health and observability metrics.
 | `influxdb_ok` | bool | n/a | InfluxDB connectivity status (`true` if healthy, `false` if down) |
 | `influxdb_successful_batches` | uint64 | count | Cumulative count of successful batch writes to InfluxDB since startup |
 | `influxdb_failed_batches` | uint64 | count | Cumulative count of failed batch writes to InfluxDB since startup |
-| `pings_sent_total` | uint64 | count | Total monitoring pings sent since application startup |
+| `pings_sent_total` | uint64 | count | Total pings sent by continuous monitoring pingers since application startup (excludes ICMP discovery sweeps) |
 
 **Timestamp:** Time when metrics collected
 
@@ -2356,7 +2356,7 @@ netscan exposes HTTP health check endpoints for monitoring, container orchestrat
 | `influxdb_ok` | bool | InfluxDB connectivity status. `true` if InfluxDB health check passes, `false` if unreachable. |
 | `influxdb_successful` | uint64 | Cumulative count of successful batch writes to InfluxDB since service startup |
 | `influxdb_failed` | uint64 | Cumulative count of failed batch writes to InfluxDB since service startup |
-| `pings_sent_total` | uint64 | Total monitoring pings sent across all devices since service startup |
+| `pings_sent_total` | uint64 | Total pings sent by continuous monitoring pingers across all devices since service startup (excludes ICMP discovery sweeps) |
 | `goroutines` | int | Current number of Go goroutines in the application. Used for detecting goroutine leaks. Normal range: 100-500 depending on device count. |
 | `memory_mb` | uint64 | Go heap memory usage in MB (from `runtime.MemStats.Alloc`). Only includes Go-managed memory. |
 | `rss_mb` | uint64 | OS-level resident set size in MB (from `/proc/self/status` VmRSS on Linux). Total physical memory used by process. Returns `0` on non-Linux systems. |

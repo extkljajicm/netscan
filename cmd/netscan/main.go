@@ -86,7 +86,8 @@ func main() {
 	// Initialize atomic counter for tracking in-flight pings
 	var currentInFlightPings atomic.Int64
 	
-	// Initialize atomic counter for total pings sent (for observability/metrics)
+	// Initialize atomic counter for total pings sent by continuous monitoring pingers (for observability/metrics)
+	// Note: This counter tracks only pings from StartPinger goroutines, not ICMP discovery sweeps
 	var totalPingsSent atomic.Uint64
 
 	// Initialize atomic counter for tracking in-flight SNMP queries
