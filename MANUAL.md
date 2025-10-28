@@ -934,24 +934,7 @@ netscan implements a sophisticated event-driven architecture with five independe
 
 **Memory Protection:** Calls `checkMemoryUsage()` before each scan to warn if memory exceeds configured limit
 
-#### 2. Daily SNMP Scan Ticker (`dailySNMPChan`)
-
-**Schedule:** Configurable via `cfg.SNMPDailySchedule` in HH:MM format (e.g., `"02:00"`)
-
-**Purpose:** Performs full SNMP scan of all known devices at a scheduled time each day
-
-**Operation Flow:**
-1. Retrieves all device IPs from StateManager via `stateMgr.GetAllIPs()`
-2. Calls `discovery.RunSNMPScan()` with all IPs and SNMP configuration
-3. Updates StateManager with hostname and sysDescr via `stateMgr.UpdateDeviceSNMP()`
-4. Writes device info to InfluxDB via `writer.WriteDeviceInfo()`
-5. Logs success and failure counts for visibility
-
-**Implementation:** Uses `createDailySNMPChannel()` function that spawns a goroutine calculating time until next scheduled run with 24-hour wraparound handling
-
-**Optional:** Disabled if `cfg.SNMPDailySchedule` is empty string (creates dummy channel that never fires)
-
-#### 3. Pinger Reconciliation Ticker (`reconciliationTicker`)
+#### 2. Pinger Reconciliation Ticker (`reconciliationTicker`)
 
 **Interval:** Fixed 5 seconds
 
@@ -978,6 +961,38 @@ netscan implements a sophisticated event-driven architecture with five independe
 
 **Concurrency Safety:** All map access protected by `pingersMu` mutex
 
+#### 3. SNMP Reconciliation Ticker (`snmpReconciliationTicker`)
+
+**Interval:** Fixed 10 seconds
+
+**Purpose:** Ensures every device in StateManager has an active continuous SNMP poller goroutine
+
+**Operation Flow:**
+1. Acquires `snmpPollersMu` lock for thread-safe access to `activeSNMPPollers` and `stoppingSNMPPollers` maps
+2. Retrieves current IPs from StateManager and builds lookup map
+3. **Start New SNMP Pollers:**
+   - For each IP in StateManager not in `activeSNMPPollers` AND not in `stoppingSNMPPollers`
+   - Creates child context with `context.WithCancel()`
+   - Stores cancel function in `activeSNMPPollers[ip]`
+   - Increments `snmpPollerWg` before starting goroutine
+   - Launches wrapper goroutine that calls `monitoring.StartSNMPPoller()` and notifies `snmpPollerExitChan` on completion
+4. **Stop Removed SNMP Pollers:**
+   - For each IP in `activeSNMPPollers` not in current StateManager IPs (device was pruned)
+   - Moves IP to `stoppingSNMPPollers[ip] = true` before calling cancel function
+   - Removes IP from `activeSNMPPollers` map
+   - Calls `cancelFunc()` to signal SNMP poller to stop (asynchronous)
+5. Releases `snmpPollersMu` lock
+
+**Race Prevention:** The `stoppingSNMPPollers` map prevents race condition where a device is pruned and quickly re-discovered before old SNMP poller fully exits. A separate goroutine listens on `snmpPollerExitChan` and removes IPs from `stoppingSNMPPollers` when SNMP pollers confirm exit.
+
+**Concurrency Safety:** All map access protected by `snmpPollersMu` mutex
+
+**Polling Interval:** Each SNMP poller polls at `cfg.SNMPInterval` (default: 24 hours), independent of other pollers
+
+**Rate Limiting:** Global SNMP rate limiter controls sustained query rate across all devices via `cfg.SNMPRateLimit` and `cfg.SNMPBurstLimit`
+
+**Circuit Breaker:** Devices with consecutive SNMP failures (`cfg.SNMPMaxConsecutiveFails`) are suspended for `cfg.SNMPBackoffDuration` to avoid wasting resources
+
 #### 4. State Pruning Ticker (`pruningTicker`)
 
 **Interval:** Fixed 1 hour
@@ -990,7 +1005,7 @@ netscan implements a sophisticated event-driven architecture with five independe
 3. Logs each pruned device at debug level with IP and hostname
 4. Logs summary at info level if any devices were pruned
 
-**Integration:** Reconciliation ticker automatically detects removed devices and stops their pingers in next cycle (within 5 seconds)
+**Integration:** Reconciliation tickers automatically detect removed devices and stop their pingers/SNMP pollers in next cycle (within 5-10 seconds)
 
 #### 5. Health Report Ticker (`healthReportTicker`)
 
@@ -1032,22 +1047,32 @@ The StateManager is the **central device registry** and the only authoritative s
 **Device Struct Fields:**
 ```go
 type Device struct {
-    IP               string    // IPv4 address (map key)
-    Hostname         string    // From SNMP or IP as fallback
-    SysDescr         string    // SNMP sysDescr MIB-II value
-    LastSeen         time.Time // Last successful ping timestamp
-    ConsecutiveFails int       // Circuit breaker counter
-    SuspendedUntil   time.Time // Circuit breaker suspension timestamp
+    IP                    string    // IPv4 address (map key)
+    Hostname              string    // From SNMP or IP as fallback
+    SysDescr              string    // SNMP sysDescr MIB-II value
+    LastSeen              time.Time // Last successful ping timestamp
+    ConsecutiveFails      int       // ICMP circuit breaker counter
+    SuspendedUntil        time.Time // ICMP circuit breaker suspension timestamp
+    SNMPConsecutiveFails  int       // SNMP circuit breaker counter
+    SNMPSuspendedUntil    time.Time // SNMP circuit breaker suspension timestamp
 }
 ```
 
 **Circuit Breaker Logic:**
 
-The StateManager implements automatic device suspension to prevent wasting resources on consistently failing devices:
+The StateManager implements dual independent circuit breakers (ICMP and SNMP) to prevent wasting resources on consistently failing devices:
 
+**ICMP Circuit Breaker:**
 - **`ReportPingFail(ip, maxFails, backoff)`**: Increments `ConsecutiveFails` counter. When threshold reached, sets `SuspendedUntil` to `now + backoff` and returns `true` to indicate suspension.
-
 - **`IsSuspended(ip)`**: Returns `true` if `SuspendedUntil` is set and in the future. Pingers check this before acquiring rate limiter token.
+- **`ReportPingSuccess(ip)`**: Resets `ConsecutiveFails` to 0 and clears `SuspendedUntil`.
+
+**SNMP Circuit Breaker:**
+- **`ReportSNMPFail(ip, maxFails, backoff)`**: Increments `SNMPConsecutiveFails` counter. When threshold reached, sets `SNMPSuspendedUntil` to `now + backoff` and returns `true` to indicate suspension.
+- **`IsSNMPSuspended(ip)`**: Returns `true` if `SNMPSuspendedUntil` is set and in the future. SNMP pollers check this before acquiring rate limiter token.
+- **`ReportSNMPSuccess(ip)`**: Resets `SNMPConsecutiveFails` to 0 and clears `SNMPSuspendedUntil`.
+
+**Independence:** ICMP and SNMP circuit breakers operate independently. A device may have ICMP monitoring suspended while SNMP polling continues, or vice versa.
 
 - **`ReportPingSuccess(ip)`**: Resets `ConsecutiveFails` to 0 and clears `SuspendedUntil` on any successful ping.
 
@@ -1061,9 +1086,13 @@ The StateManager implements automatic device suspension to prevent wasting resou
 - `AddDevice(ip)` - Add by IP only, returns true if new
 - `UpdateDeviceSNMP(ip, hostname, sysDescr)` - Enrich with SNMP data
 - `UpdateLastSeen(ip)` - Update timestamp on successful ping
-- `GetAllIPs()` - Used by reconciliation and daily SNMP scan
+- `GetAllIPs()` - Used by reconciliation loops
 - `PruneStale(olderThan)` - Remove devices not seen within duration
-- `GetSuspendedCount()` - Count for health metrics
+- `GetSuspendedCount()` - Count of ICMP-suspended devices for health metrics
+- `GetSNMPSuspendedCount()` - Count of SNMP-suspended devices for health metrics
+- `ReportSNMPSuccess(ip)` - Reset SNMP circuit breaker on success
+- `ReportSNMPFail(ip, maxFails, backoff)` - Increment SNMP failure counter, suspend if threshold reached
+- `IsSNMPSuspended(ip)` - Check if SNMP polling is suspended for device
 
 #### InfluxDB Writer: High-Performance Batching
 
@@ -1176,7 +1205,7 @@ netscan implements comprehensive concurrency safety through multiple mechanisms:
 
 **5. Panic Recovery:**
 - All long-running goroutines wrapped with `defer func() { recover() }` pattern
-- Includes: discovery workers, SNMP scan workers, pingers, shutdown handler, daily SNMP scheduler, pinger exit notification handler
+- Includes: discovery workers, SNMP scan workers, pingers, SNMP pollers, shutdown handler, pinger exit notification handler, SNMP poller exit notification handler
 - Logs error with context (IP, operation type) and continues operation
 - Prevents single goroutine panic from crashing entire service
 
@@ -1859,7 +1888,6 @@ export SNMP_COMMUNITY=private-community
 |-----------|------|---------|----------|-------------|
 | `networks` | `[]string` | *(none)* | **Yes** | List of CIDR network ranges to scan for devices (e.g., `["192.168.1.0/24", "10.0.0.0/24"]`). **Critical:** Must match your actual network or netscan will find 0 devices. |
 | `icmp_discovery_interval` | `duration` | *(none)* | **Yes** | How often to run ICMP discovery sweeps to find new devices (e.g., `"5m"` for 5 minutes). Minimum: 1 minute. **Note:** IP addresses are scanned in randomized order to obscure the scanning pattern. |
-| `snmp_daily_schedule` | `string` | `""` (disabled) | No | Daily SNMP scan time in HH:MM format (24-hour time). Leave empty to disable scheduled scans. Example: `"02:00"` runs at 2 AM daily. |
 
 #### SNMP Settings
 
@@ -1870,6 +1898,34 @@ export SNMP_COMMUNITY=private-community
 | `snmp.timeout` | `duration` | `"5s"` | No | Timeout for individual SNMP requests. |
 | `snmp.retries` | `int` | *(none)* | **Yes** | Number of retry attempts for failed SNMP requests. Recommended: `1` to `3`. |
 
+#### Continuous SNMP Polling Settings
+
+The application now uses continuous per-device SNMP polling instead of a daily batch scan.
+
+| Parameter | Type | Default | Required | Description |
+|-----------|------|---------|----------|-------------|
+| `snmp_interval` | `duration` | `"24h"` | No | How often to poll each device via SNMP for metadata updates (hostname, sysDescr). Minimum: 1 minute. Default: 24 hours. Each device polls independently on this interval. |
+| `snmp_rate_limit` | `float64` | `8.0` | No | Sustained SNMP query rate in queries per second across all devices (token bucket rate). Controls global SNMP rate to prevent overwhelming SNMP agents. |
+| `snmp_burst_limit` | `int` | `16` | No | Maximum burst SNMP query capacity (token bucket size). Allows short bursts above sustained rate. |
+
+#### SNMP Circuit Breaker Settings
+
+The circuit breaker automatically suspends SNMP polling for devices that fail SNMP queries consecutively.
+
+| Parameter | Type | Default | Required | Description |
+|-----------|------|---------|----------|-------------|
+| `snmp_max_consecutive_fails` | `int` | `3` | No | Number of consecutive SNMP failures before device SNMP is suspended. Range: 1-100. |
+| `snmp_backoff_duration` | `duration` | `"1h"` | No | How long to suspend SNMP polling after reaching max failures. SNMP will be retried after this duration. |
+
+**Example SNMP circuit breaker behavior:**
+- Device SNMP fails 3 times consecutively
+- SNMP polling suspended for 1 hour
+- During suspension, SNMP queries are skipped (saves resources)
+- After 1 hour, SNMP is retried
+- If successful, failure counter resets
+- If it fails again, cycle repeats
+- **Note:** ICMP ping monitoring continues independently during SNMP suspension
+
 #### Monitoring Settings
 
 | Parameter | Type | Default | Required | Description |
@@ -1879,29 +1935,30 @@ export SNMP_COMMUNITY=private-community
 | `ping_rate_limit` | `float64` | `64.0` | No | Sustained ping rate in pings per second across all devices (token bucket rate). Controls global ping rate to prevent network flooding. |
 | `ping_burst_limit` | `int` | `256` | No | Maximum burst ping capacity (token bucket size). Allows short bursts above sustained rate. |
 
-#### Circuit Breaker Settings
+#### ICMP Circuit Breaker Settings
 
-The circuit breaker automatically suspends devices that fail ping checks consecutively to prevent wasting resources.
+The circuit breaker automatically suspends ICMP ping monitoring for devices that fail ping checks consecutively to prevent wasting resources.
 
 | Parameter | Type | Default | Required | Description |
 |-----------|------|---------|----------|-------------|
-| `ping_max_consecutive_fails` | `int` | `10` | No | Number of consecutive ping failures before device is suspended. Range: 1-100. |
-| `ping_backoff_duration` | `duration` | `"5m"` | No | How long to suspend device after reaching max failures. Device will be retried after this duration. |
+| `ping_max_consecutive_fails` | `int` | `10` | No | Number of consecutive ping failures before device ICMP monitoring is suspended. Range: 1-100. |
+| `ping_backoff_duration` | `duration` | `"5m"` | No | How long to suspend ICMP monitoring after reaching max failures. Device will be retried after this duration. |
 
-**Example circuit breaker behavior:**
+**Example ICMP circuit breaker behavior:**
 - Device fails ping 10 times consecutively
-- Device suspended for 5 minutes
+- ICMP monitoring suspended for 5 minutes
 - During suspension, pings are skipped (saves resources)
 - After 5 minutes, device is retried
 - If successful, failure counter resets
 - If it fails again, cycle repeats
+- **Note:** SNMP polling continues independently during ICMP suspension
 
 #### Performance Tuning Settings
 
 | Parameter | Type | Default | Required | Description |
 |-----------|------|---------|----------|-------------|
 | `icmp_workers` | `int` | `64` | No | Number of concurrent goroutines for ICMP discovery sweeps. **Tuning:** Small networks (<500 devices): 64; Medium (500-2000): 128; Large (2000+): 256. **Warning:** Values >256 may cause kernel socket buffer overflow. |
-| `snmp_workers` | `int` | `32` | No | Number of concurrent goroutines for SNMP polling. **Recommended:** 25-50% of `icmp_workers` to avoid overwhelming SNMP agents. |
+| `snmp_workers` | `int` | `32` | No | Number of concurrent goroutines for **initial** SNMP scan after device discovery. **Note:** Continuous SNMP polling uses per-device goroutines controlled by `snmp_interval`, not this worker pool. **Recommended:** 25-50% of `icmp_workers` to avoid overwhelming SNMP agents during discovery. |
 
 #### InfluxDB Settings
 
@@ -1971,7 +2028,11 @@ networks:
   - "192.168.2.0/24"
 
 icmp_discovery_interval: "5m"
-snmp_daily_schedule: "02:00"
+
+# Continuous SNMP polling settings
+snmp_interval: "24h"  # Poll each device every 24 hours
+snmp_rate_limit: 8.0
+snmp_burst_limit: 16
 
 snmp:
   community: "${SNMP_COMMUNITY}"  # From environment
@@ -2102,7 +2163,7 @@ Stores device metadata collected via SNMP.
 
 **Frequency:** 
 - Written immediately when device first discovered
-- Re-written during daily SNMP scan (if configured)
+- Re-written on each continuous SNMP poll (default: every 24 hours per device)
 - Re-written when SNMP data changes
 
 **Tags:**
@@ -2849,10 +2910,14 @@ type Config struct {
     // Network Discovery
     IcmpDiscoveryInterval time.Duration
     Networks              []string
-    SNMPDailySchedule     string
     
     // SNMP
-    SNMP SNMPConfig
+    SNMP                    SNMPConfig
+    SNMPInterval            time.Duration
+    SNMPRateLimit           float64
+    SNMPBurstLimit          int
+    SNMPMaxConsecutiveFails int
+    SNMPBackoffDuration     time.Duration
     
     // Monitoring
     PingInterval          time.Duration
