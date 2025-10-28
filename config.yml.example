@@ -31,11 +31,6 @@ networks:
 # How often to run ICMP discovery to find new devices
 icmp_discovery_interval: "5m"
 
-# Daily scheduled SNMP scan time (HH:MM format in 24-hour time)
-# Full SNMP scan of all known devices runs once per day at this time
-# Leave empty to disable scheduled SNMP scans (only immediate scans on device discovery)
-snmp_daily_schedule: "02:00"
-
 # =============================================================================
 # SNMP SETTINGS
 # =============================================================================
@@ -46,6 +41,20 @@ snmp:
   port: 161
   timeout: "5s"
   retries: 1
+
+# Continuous SNMP polling settings
+# How often to poll each device via SNMP for metadata updates (hostname, sysDescr)
+snmp_interval: "24h"  # Default: poll each device every 24 hours
+
+# Global SNMP rate limiting (token bucket algorithm)
+# Controls the sustained rate of SNMP queries across all devices
+snmp_rate_limit: 8.0   # Default: 8 queries per second (tokens/sec)
+snmp_burst_limit: 16   # Default: 16 query burst capacity
+
+# SNMP circuit breaker settings for automatic device suspension
+# Automatically suspends SNMP polling for devices that fail consecutive queries
+snmp_max_consecutive_fails: 3  # Default: 3 consecutive SNMP failures before suspension
+snmp_backoff_duration: "1h"    # Default: 1 hour SNMP suspension after max failures
 
 # =============================================================================
 # MONITORING SETTINGS
@@ -84,6 +93,8 @@ ping_backoff_duration: "5m"     # Default: 5 minute suspension after max failure
 icmp_workers: 64
 
 # Number of concurrent SNMP polling workers
+# This now applies ONLY to the initial SNMP scan after device discovery
+# Continuous SNMP polling uses per-device goroutines controlled by snmp_interval
 # Recommended: 25-50% of icmp_workers to avoid overwhelming SNMP agents
 snmp_workers: 32
 

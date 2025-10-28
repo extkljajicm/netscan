@@ -168,6 +168,11 @@ func TestValidateCircuitBreakerParams(t *testing.T) {
 				PingBurstLimit:          256,
 				PingMaxConsecutiveFails: tt.maxFails,
 				PingBackoffDuration:     tt.backoff,
+				SNMPInterval:            24 * time.Hour,
+				SNMPRateLimit:           8.0,
+				SNMPBurstLimit:          16,
+				SNMPMaxConsecutiveFails: 3,
+				SNMPBackoffDuration:     1 * time.Hour,
 				SNMP: SNMPConfig{
 					Community: "test-community",
 					Port:      161,

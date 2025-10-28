@@ -176,6 +176,11 @@ PingRateLimit:         tt.rateLimit,
 PingBurstLimit:        tt.burstLimit,
 PingMaxConsecutiveFails: 10,              // Circuit breaker default
 PingBackoffDuration:     5 * time.Minute, // Circuit breaker default
+SNMPInterval:            24 * time.Hour,  // SNMP polling interval
+SNMPRateLimit:           8.0,             // SNMP rate limit default
+SNMPBurstLimit:          16,              // SNMP burst limit default
+SNMPMaxConsecutiveFails: 3,               // SNMP circuit breaker default
+SNMPBackoffDuration:     1 * time.Hour,   // SNMP backoff duration default
 SNMP: SNMPConfig{
 Community: "test-community",
 Port:      161,

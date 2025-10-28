@@ -7,51 +7,6 @@ import (
 	"time"
 )
 
-// TestCreateDailySNMPChannel tests the daily SNMP channel creation with various time formats
-func TestCreateDailySNMPChannel(t *testing.T) {
-	tests := []struct {
-		name       string
-		timeStr    string
-		expectFail bool
-	}{
-		{"Valid morning time", "02:00", false},
-		{"Valid afternoon time", "14:30", false},
-		{"Valid midnight", "00:00", false},
-		{"Valid end of day", "23:59", false},
-		{"Invalid format - single digit hour", "2:00", true},
-		{"Invalid format - single digit minute", "02:0", true},
-		{"Invalid hour", "25:00", true},
-		{"Invalid minute", "12:61", true},
-		{"Empty string", "", true},
-		{"Invalid characters", "ab:cd", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ch := createDailySNMPChannel(tt.timeStr)
-			
-			// Channel should always be created (falls back to default if invalid)
-			if ch == nil {
-				t.Errorf("createDailySNMPChannel() returned nil channel")
-			}
-			
-			// For valid times, verify the channel is functional
-			if !tt.expectFail {
-				// Give it a tiny bit of time to initialize
-				time.Sleep(10 * time.Millisecond)
-				
-				// Channel should be readable (non-blocking check)
-				select {
-				case <-ch:
-					// If it fires immediately, that's fine (scheduled for today)
-				default:
-					// Not fired yet, which is expected
-				}
-			}
-		})
-	}
-}
-
 // TestGracefulShutdown tests that context cancellation properly stops all tickers
 func TestGracefulShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -421,38 +376,6 @@ func TestMaxPingersLimit(t *testing.T) {
 	
 	if currentPingers != maxPingers {
 		t.Errorf("Expected current pingers to be %d, got %d", maxPingers, currentPingers)
-	}
-}
-
-// TestCreateDailySNMPChannelTimeParsing tests specific time parsing edge cases
-func TestCreateDailySNMPChannelTimeParsing(t *testing.T) {
-	// This test verifies the channel creation doesn't panic on various inputs
-	inputs := []string{
-		"00:00",
-		"12:00",
-		"23:59",
-		"",
-		"invalid",
-		"25:00",
-		"12:60",
-		"1:00",  // Invalid format (should be 01:00)
-		"12:5",  // Invalid format (should be 12:05)
-	}
-	
-	for _, input := range inputs {
-		t.Run("time="+input, func(t *testing.T) {
-			// Should not panic
-			defer func() {
-				if r := recover(); r != nil {
-					t.Errorf("createDailySNMPChannel panicked with input %q: %v", input, r)
-				}
-			}()
-			
-			ch := createDailySNMPChannel(input)
-			if ch == nil {
-				t.Errorf("createDailySNMPChannel returned nil for input %q", input)
-			}
-		})
 	}
 }
 

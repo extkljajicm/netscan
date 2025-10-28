@@ -44,8 +44,12 @@ type Config struct {
 	PingBurstLimit        int            `yaml:"ping_burst_limit"`       // Token bucket capacity (max burst)
 	PingMaxConsecutiveFails int          `yaml:"ping_max_consecutive_fails"` // Circuit breaker: max consecutive failures before suspension
 	PingBackoffDuration   time.Duration  `yaml:"ping_backoff_duration"`  // Circuit breaker: suspension duration after max failures
+	SNMPInterval          time.Duration  `yaml:"snmp_interval"`          // Interval for continuous SNMP polling per device
+	SNMPRateLimit         float64        `yaml:"snmp_rate_limit"`        // Tokens per second (sustained SNMP rate)
+	SNMPBurstLimit        int            `yaml:"snmp_burst_limit"`       // Token bucket capacity (max SNMP burst)
+	SNMPMaxConsecutiveFails int          `yaml:"snmp_max_consecutive_fails"` // Circuit breaker: max consecutive SNMP failures before suspension
+	SNMPBackoffDuration   time.Duration  `yaml:"snmp_backoff_duration"`  // Circuit breaker: SNMP suspension duration after max failures
 	InfluxDB              InfluxDBConfig `yaml:"influxdb"`
-	SNMPDailySchedule     string         `yaml:"snmp_daily_schedule"`  // Daily SNMP scan time (HH:MM format)
 	HealthCheckPort       int            `yaml:"health_check_port"`    // HTTP health check endpoint port
 	HealthReportInterval  time.Duration  `yaml:"health_report_interval"` // Interval for writing health metrics
 	// Resource protection settings
@@ -77,6 +81,11 @@ func LoadConfig(path string) (*Config, error) {
 		PingBurstLimit          int      `yaml:"ping_burst_limit"`
 		PingMaxConsecutiveFails int      `yaml:"ping_max_consecutive_fails"`
 		PingBackoffDuration     string   `yaml:"ping_backoff_duration"`
+		SNMPInterval            string   `yaml:"snmp_interval"`
+		SNMPRateLimit           float64  `yaml:"snmp_rate_limit"`
+		SNMPBurstLimit          int      `yaml:"snmp_burst_limit"`
+		SNMPMaxConsecutiveFails int      `yaml:"snmp_max_consecutive_fails"`
+		SNMPBackoffDuration     string   `yaml:"snmp_backoff_duration"`
 		InfluxDB                struct {
 			URL           string `yaml:"url"`
 			Token         string `yaml:"token"`
@@ -86,7 +95,6 @@ func LoadConfig(path string) (*Config, error) {
 			BatchSize     int    `yaml:"batch_size"`
 			FlushInterval string `yaml:"flush_interval"`
 		} `yaml:"influxdb"`
-		SNMPDailySchedule     string `yaml:"snmp_daily_schedule"`
 		HealthCheckPort       int    `yaml:"health_check_port"`
 		HealthReportInterval  string `yaml:"health_report_interval"`
 		// Resource protection settings
@@ -171,6 +179,24 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 
+	// Parse SNMPInterval if specified
+	var snmpInterval time.Duration
+	if raw.SNMPInterval != "" {
+		snmpInterval, err = time.ParseDuration(raw.SNMPInterval)
+		if err != nil {
+			return nil, fmt.Errorf("invalid snmp_interval: %v", err)
+		}
+	}
+
+	// Parse SNMPBackoffDuration if specified
+	var snmpBackoffDuration time.Duration
+	if raw.SNMPBackoffDuration != "" {
+		snmpBackoffDuration, err = time.ParseDuration(raw.SNMPBackoffDuration)
+		if err != nil {
+			return nil, fmt.Errorf("invalid snmp_backoff_duration: %v", err)
+		}
+	}
+
 	// Set default SNMP timeout if not specified
 	if raw.SNMP.Timeout == 0 {
 		raw.SNMP.Timeout = 5 * time.Second
@@ -231,6 +257,23 @@ func LoadConfig(path string) (*Config, error) {
 		pingBackoffDuration = 5 * time.Minute // Default: 5 minute suspension
 	}
 
+	// Set SNMP continuous polling defaults
+	if snmpInterval == 0 {
+		snmpInterval = 24 * time.Hour // Default: poll SNMP every 24 hours
+	}
+	if raw.SNMPRateLimit == 0 {
+		raw.SNMPRateLimit = 8.0 // Default: 8 SNMP queries per second
+	}
+	if raw.SNMPBurstLimit == 0 {
+		raw.SNMPBurstLimit = 16 // Default: allow bursts up to 16 queries
+	}
+	if raw.SNMPMaxConsecutiveFails == 0 {
+		raw.SNMPMaxConsecutiveFails = 3 // Default: 3 consecutive SNMP failures before suspension
+	}
+	if snmpBackoffDuration == 0 {
+		snmpBackoffDuration = 1 * time.Hour // Default: 1 hour SNMP suspension
+	}
+
 	// Apply environment variable expansion to sensitive fields
 	raw.InfluxDB.URL = expandEnv(raw.InfluxDB.URL)
 	raw.InfluxDB.Token = expandEnv(raw.InfluxDB.Token)
@@ -252,6 +295,11 @@ func LoadConfig(path string) (*Config, error) {
 		PingBurstLimit:          raw.PingBurstLimit,
 		PingMaxConsecutiveFails: raw.PingMaxConsecutiveFails,
 		PingBackoffDuration:     pingBackoffDuration,
+		SNMPInterval:            snmpInterval,
+		SNMPRateLimit:           raw.SNMPRateLimit,
+		SNMPBurstLimit:          raw.SNMPBurstLimit,
+		SNMPMaxConsecutiveFails: raw.SNMPMaxConsecutiveFails,
+		SNMPBackoffDuration:     snmpBackoffDuration,
 		InfluxDB: InfluxDBConfig{
 			URL:           raw.InfluxDB.URL,
 			Token:         raw.InfluxDB.Token,
@@ -261,7 +309,6 @@ func LoadConfig(path string) (*Config, error) {
 			BatchSize:     raw.InfluxDB.BatchSize,
 			FlushInterval: flushInterval,
 		},
-		SNMPDailySchedule:     raw.SNMPDailySchedule,
 		HealthCheckPort:       raw.HealthCheckPort,
 		HealthReportInterval:  healthReportInterval,
 		MaxConcurrentPingers:  raw.MaxConcurrentPingers,
@@ -304,12 +351,8 @@ func ValidateConfig(cfg *Config) (string, error) {
 	if cfg.PingInterval < time.Second {
 		return "", fmt.Errorf("ping_interval must be at least 1 second, got %v", cfg.PingInterval)
 	}
-
-	// Validate SNMP daily schedule format (HH:MM)
-	if cfg.SNMPDailySchedule != "" {
-		if err := validateTimeFormat(cfg.SNMPDailySchedule); err != nil {
-			return "", fmt.Errorf("snmp_daily_schedule validation failed: %v", err)
-		}
+	if cfg.SNMPInterval < time.Minute {
+		return "", fmt.Errorf("snmp_interval must be at least 1 minute, got %v", cfg.SNMPInterval)
 	}
 
 	// Validate SNMP settings
@@ -390,6 +433,26 @@ func ValidateConfig(cfg *Config) (string, error) {
 	}
 	if cfg.PingBackoffDuration < time.Minute {
 		return "", fmt.Errorf("ping_backoff_duration must be at least 1 minute, got %v", cfg.PingBackoffDuration)
+	}
+
+	// Validate SNMP rate limiting settings
+	if cfg.SNMPRateLimit <= 0 {
+		return "", fmt.Errorf("snmp_rate_limit must be greater than 0, got %.2f", cfg.SNMPRateLimit)
+	}
+	if cfg.SNMPBurstLimit <= 0 {
+		return "", fmt.Errorf("snmp_burst_limit must be greater than 0, got %d", cfg.SNMPBurstLimit)
+	}
+	// Burst should be at least equal to rate to avoid immediate throttling
+	if float64(cfg.SNMPBurstLimit) < cfg.SNMPRateLimit {
+		return "WARNING: snmp_burst_limit should be >= snmp_rate_limit to avoid immediate throttling", nil
+	}
+
+	// Validate SNMP circuit breaker settings
+	if cfg.SNMPMaxConsecutiveFails <= 0 {
+		return "", fmt.Errorf("snmp_max_consecutive_fails must be greater than 0, got %d", cfg.SNMPMaxConsecutiveFails)
+	}
+	if cfg.SNMPBackoffDuration < time.Minute {
+		return "", fmt.Errorf("snmp_backoff_duration must be at least 1 minute, got %v", cfg.SNMPBackoffDuration)
 	}
 
 	return "", nil

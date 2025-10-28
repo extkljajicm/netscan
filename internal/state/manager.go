@@ -9,13 +9,15 @@ import (
 
 // Device represents a discovered network device with metadata
 type Device struct {
-	IP               string    // IPv4 address of the device
-	Hostname         string    // Device hostname from SNMP or IP address
-	SysDescr         string    // SNMP sysDescr MIB-II value
-	LastSeen         time.Time // Timestamp of last successful discovery
-	ConsecutiveFails int       // Number of consecutive ping failures (circuit breaker)
-	SuspendedUntil   time.Time // Timestamp until which device is suspended (circuit breaker)
-	heapIndex        int       // Index in the min-heap for O(log n) eviction (internal use only)
+	IP                    string    // IPv4 address of the device
+	Hostname              string    // Device hostname from SNMP or IP address
+	SysDescr              string    // SNMP sysDescr MIB-II value
+	LastSeen              time.Time // Timestamp of last successful discovery
+	ConsecutiveFails      int       // Number of consecutive ping failures (circuit breaker)
+	SuspendedUntil        time.Time // Timestamp until which device is suspended (circuit breaker)
+	SNMPConsecutiveFails  int       // Number of consecutive SNMP failures (circuit breaker)
+	SNMPSuspendedUntil    time.Time // Timestamp until which SNMP is suspended (circuit breaker)
+	heapIndex             int       // Index in the min-heap for O(log n) eviction (internal use only)
 }
 
 // deviceHeap implements heap.Interface for min-heap ordered by LastSeen timestamp
@@ -352,6 +354,68 @@ func (m *Manager) GetSuspendedCountAccurate() int {
 	for _, dev := range m.devices {
 		// Use the same logic as IsSuspended
 		if !dev.SuspendedUntil.IsZero() && now.Before(dev.SuspendedUntil) {
+			count++
+		}
+	}
+	return count
+}
+
+// ReportSNMPSuccess resets SNMP circuit breaker state on successful SNMP query
+func (m *Manager) ReportSNMPSuccess(ip string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if dev, exists := m.devices[ip]; exists {
+		dev.SNMPConsecutiveFails = 0
+		dev.SNMPSuspendedUntil = time.Time{} // Zero time (not suspended)
+	}
+}
+
+// ReportSNMPFail increments SNMP failure count and suspends SNMP polling if threshold reached
+// Returns true if SNMP polling was suspended (circuit breaker tripped)
+func (m *Manager) ReportSNMPFail(ip string, maxFails int, backoff time.Duration) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	dev, exists := m.devices[ip]
+	if !exists {
+		return false
+	}
+
+	dev.SNMPConsecutiveFails++
+	
+	// Check if we've reached the threshold
+	if dev.SNMPConsecutiveFails >= maxFails {
+		// Trip the circuit breaker
+		dev.SNMPConsecutiveFails = 0 // Reset counter
+		dev.SNMPSuspendedUntil = time.Now().Add(backoff)
+		return true // SNMP is now suspended
+	}
+	
+	return false // SNMP not suspended
+}
+
+// IsSNMPSuspended checks if SNMP polling is currently suspended by the circuit breaker
+func (m *Manager) IsSNMPSuspended(ip string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	dev, exists := m.devices[ip]
+	if !exists {
+		return false
+	}
+	
+	// SNMP is suspended if SNMPSuspendedUntil is set and in the future
+	return !dev.SNMPSuspendedUntil.IsZero() && time.Now().Before(dev.SNMPSuspendedUntil)
+}
+
+// GetSNMPSuspendedCount returns the number of devices with SNMP polling currently suspended
+// This iterates all devices for an accurate count
+func (m *Manager) GetSNMPSuspendedCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	
+	count := 0
+	now := time.Now()
+	for _, dev := range m.devices {
+		if !dev.SNMPSuspendedUntil.IsZero() && now.Before(dev.SNMPSuspendedUntil) {
 			count++
 		}
 	}

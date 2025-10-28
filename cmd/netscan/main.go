@@ -75,11 +75,25 @@ func main() {
 		Int("burst_limit", cfg.PingBurstLimit).
 		Msg("Ping rate limiter initialized")
 
+	// Initialize global rate limiter for SNMP operations
+	// This controls the sustained rate of SNMP queries across all devices
+	snmpRateLimiter := rate.NewLimiter(rate.Limit(cfg.SNMPRateLimit), cfg.SNMPBurstLimit)
+	log.Info().
+		Float64("rate_limit", cfg.SNMPRateLimit).
+		Int("burst_limit", cfg.SNMPBurstLimit).
+		Msg("SNMP rate limiter initialized")
+
 	// Initialize atomic counter for tracking in-flight pings
 	var currentInFlightPings atomic.Int64
 	
 	// Initialize atomic counter for total pings sent (for observability/metrics)
 	var totalPingsSent atomic.Uint64
+
+	// Initialize atomic counter for tracking in-flight SNMP queries
+	var currentInFlightSNMP atomic.Int64
+	
+	// Initialize atomic counter for total SNMP queries sent (for observability/metrics)
+	var totalSNMPQueries atomic.Uint64
 
 	// Map IP addresses to their pinger cancellation functions
 	// CRITICAL: Protected by mutex to prevent concurrent map access
@@ -95,6 +109,18 @@ func main() {
 	// Buffer size allows multiple pingers to exit concurrently without blocking
 	pingerExitChan := make(chan string, 100)
 
+	// Map IP addresses to their SNMP poller cancellation functions
+	// CRITICAL: Protected by mutex to prevent concurrent map access
+	activeSNMPPollers := make(map[string]context.CancelFunc)
+	var snmpPollersMu sync.Mutex
+
+	// Map of IPs currently in the process of stopping SNMP polling
+	// CRITICAL: Prevents starting a new SNMP poller before old one fully exits
+	stoppingSNMPPollers := make(map[string]bool)
+
+	// Channel for SNMP pollers to notify when they've fully exited
+	snmpPollerExitChan := make(chan string, 100)
+
 	// Start health check endpoint with accurate pinger count and total pings sent
 	getPingerCount := func() int {
 		return int(currentInFlightPings.Load())
@@ -109,6 +135,9 @@ func main() {
 
 	// WaitGroup for tracking all pinger goroutines
 	var pingerWg sync.WaitGroup
+
+	// WaitGroup for tracking all SNMP poller goroutines
+	var snmpPollerWg sync.WaitGroup
 
 	// Setup signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -133,18 +162,13 @@ func main() {
 	icmpDiscoveryTicker := time.NewTicker(cfg.IcmpDiscoveryInterval)
 	defer icmpDiscoveryTicker.Stop()
 
-	// Ticker 2: Daily SNMP Scan Loop - scheduled full SNMP scan
-	var dailySNMPChan <-chan time.Time
-	if cfg.SNMPDailySchedule != "" {
-		dailySNMPChan = createDailySNMPChannel(cfg.SNMPDailySchedule)
-	} else {
-		// Create a dummy channel that never fires
-		dailySNMPChan = make(<-chan time.Time)
-	}
-
-	// Ticker 3: Pinger Reconciliation Loop - ensures all devices have pingers
+	// Ticker 2: Pinger Reconciliation Loop - ensures all devices have pingers
 	reconciliationTicker := time.NewTicker(5 * time.Second)
 	defer reconciliationTicker.Stop()
+
+	// Ticker 3: SNMP Reconciliation Loop - ensures all devices have SNMP pollers
+	snmpReconciliationTicker := time.NewTicker(10 * time.Second)
+	defer snmpReconciliationTicker.Stop()
 
 	// Ticker 4: State Pruning Loop - removes stale devices
 	pruningTicker := time.NewTicker(1 * time.Hour)
@@ -240,12 +264,36 @@ func main() {
 		}
 	}()
 
+	// SNMP poller exit notification handler
+	// Removes IPs from stoppingSNMPPollers when their goroutines fully exit
+	go func() {
+		// Panic recovery for exit notification handler
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().
+					Interface("panic", r).
+					Msg("SNMP poller exit notification handler panic recovered")
+			}
+		}()
+
+		for {
+			select {
+			case <-mainCtx.Done():
+				return
+			case ip := <-snmpPollerExitChan:
+				snmpPollersMu.Lock()
+				delete(stoppingSNMPPollers, ip)
+				log.Debug().Str("ip", ip).Msg("SNMP poller fully exited, removed from stopping list")
+				snmpPollersMu.Unlock()
+			}
+		}
+	}()
+
 	log.Info().Msg("Starting monitoring loops...")
 	log.Info().Dur("icmp_interval", cfg.IcmpDiscoveryInterval).Msg("ICMP Discovery interval")
-	if cfg.SNMPDailySchedule != "" {
-		log.Info().Str("schedule", cfg.SNMPDailySchedule).Msg("Daily SNMP Scan schedule")
-	}
 	log.Info().Msg("Pinger Reconciliation: every 5s")
+	log.Info().Msg("SNMP Reconciliation: every 10s")
+	log.Info().Dur("snmp_interval", cfg.SNMPInterval).Msg("SNMP polling interval per device")
 	log.Info().Msg("State Pruning: every 1h")
 	log.Info().Dur("health_interval", cfg.HealthReportInterval).Msg("Health Report interval")
 
@@ -254,11 +302,12 @@ func main() {
 		select {
 		case <-mainCtx.Done():
 			// Graceful shutdown
-			log.Info().Msg("Shutting down all pingers...")
+			log.Info().Msg("Shutting down all pingers and SNMP pollers...")
 			
 			// Stop all tickers
 			icmpDiscoveryTicker.Stop()
 			reconciliationTicker.Stop()
+			snmpReconciliationTicker.Stop()
 			pruningTicker.Stop()
 			
 			// Cancel all active pingers
@@ -269,9 +318,21 @@ func main() {
 			}
 			pingersMu.Unlock()
 			
+			// Cancel all active SNMP pollers
+			snmpPollersMu.Lock()
+			for ip, cancel := range activeSNMPPollers {
+				log.Debug().Str("ip", ip).Msg("Stopping SNMP poller")
+				cancel()
+			}
+			snmpPollersMu.Unlock()
+			
 			// Wait for all pingers to exit
 			log.Info().Msg("Waiting for all pingers to stop...")
 			pingerWg.Wait()
+			
+			// Wait for all SNMP pollers to exit
+			log.Info().Msg("Waiting for all SNMP pollers to stop...")
+			snmpPollerWg.Wait()
 			
 			log.Info().Msg("Shutdown complete")
 			return
@@ -317,41 +378,11 @@ func main() {
 									Msg("Device enriched and written to InfluxDB")
 							}
 						} else {
-							log.Debug().Str("ip", newIP).Msg("SNMP scan failed, will retry in next daily scan")
+							log.Debug().Str("ip", newIP).Msg("SNMP scan failed, will retry via continuous SNMP polling")
 						}
 					}(ip)
 				}
 			}
-
-		case <-dailySNMPChan:
-			// Daily SNMP Scan: Full scan of all known devices
-			log.Info().Msg("Starting daily full SNMP scan...")
-			allIPs := stateMgr.GetAllIPs()
-			log.Info().Int("device_count", len(allIPs)).Msg("Performing SNMP scan on devices")
-			snmpDevices := discovery.RunSNMPScan(allIPs, &cfg.SNMP, cfg.SnmpWorkers)
-			log.Info().
-				Int("enriched", len(snmpDevices)).
-				Int("failed", len(allIPs)-len(snmpDevices)).
-				Msg("SNMP scan complete")
-			
-			successCount := 0
-			for _, dev := range snmpDevices {
-				stateMgr.UpdateDeviceSNMP(dev.IP, dev.Hostname, dev.SysDescr)
-				// Write device info to InfluxDB
-				if err := writer.WriteDeviceInfo(dev.IP, dev.Hostname, dev.SysDescr); err != nil {
-					log.Error().
-						Str("ip", dev.IP).
-						Err(err).
-						Msg("Failed to write device info to InfluxDB")
-				} else {
-					log.Info().
-						Str("ip", dev.IP).
-						Str("hostname", dev.Hostname).
-						Msg("Device info written to InfluxDB")
-					successCount++
-				}
-			}
-			log.Info().Int("success_count", successCount).Msg("Daily SNMP scan complete")
 
 		case <-reconciliationTicker.C:
 			// Pinger Reconciliation: Ensure all devices have pingers
@@ -438,6 +469,84 @@ func main() {
 			
 			pingersMu.Unlock()
 
+		case <-snmpReconciliationTicker.C:
+			// SNMP Reconciliation: Ensure all devices have SNMP pollers
+			snmpPollersMu.Lock()
+			
+			// Get current state IPs
+			currentIPs := stateMgr.GetAllIPs()
+			// Pre-allocate map with exact capacity to avoid reallocation (performance optimization)
+			currentIPMap := make(map[string]bool, len(currentIPs))
+			for _, ip := range currentIPs {
+				currentIPMap[ip] = true
+			}
+			
+			// Start SNMP pollers for new devices
+			// CRITICAL: Check both activeSNMPPollers AND stoppingSNMPPollers to prevent race condition
+			for ip := range currentIPMap {
+				_, isActive := activeSNMPPollers[ip]
+				_, isStopping := stoppingSNMPPollers[ip]
+				
+				// Only start SNMP poller if IP is not active AND not currently stopping
+				if !isActive && !isStopping {
+					log.Debug().Str("ip", ip).Msg("Starting continuous SNMP poller")
+					snmpPollerCtx, snmpPollerCancel := context.WithCancel(mainCtx)
+					activeSNMPPollers[ip] = snmpPollerCancel
+					
+					// Get device info for logging
+					dev, exists := stateMgr.Get(ip)
+					if !exists {
+						dev = &state.Device{IP: ip, Hostname: ip}
+					}
+					
+					snmpPollerWg.Add(1)
+					// Create a wrapper goroutine to handle exit notification
+					go func(d state.Device, ctx context.Context) {
+						// Panic recovery for SNMP poller wrapper
+						defer func() {
+							if r := recover(); r != nil {
+								log.Error().
+									Str("ip", d.IP).
+									Interface("panic", r).
+									Msg("SNMP poller wrapper panic recovered")
+							}
+						}()
+						
+						// Run the actual SNMP poller
+						monitoring.StartSNMPPoller(ctx, &snmpPollerWg, d, &cfg.SNMP, cfg.SNMPInterval, writer, stateMgr, snmpRateLimiter, &currentInFlightSNMP, &totalSNMPQueries, cfg.SNMPMaxConsecutiveFails, cfg.SNMPBackoffDuration)
+						
+						// Notify that this SNMP poller has exited
+						select {
+						case snmpPollerExitChan <- d.IP:
+							// Successfully notified
+						case <-mainCtx.Done():
+							// Main context cancelled, don't block on notification
+						}
+					}(*dev, snmpPollerCtx)
+				} else if isStopping {
+					log.Debug().
+						Str("ip", ip).
+						Msg("SNMP poller is stopping, will start new one after exit completes")
+				}
+			}
+			
+			// Stop SNMP pollers for removed devices
+			// CRITICAL: Move to stoppingSNMPPollers first, then call cancelFunc
+			for ip, cancelFunc := range activeSNMPPollers {
+				if !currentIPMap[ip] {
+					log.Debug().Str("ip", ip).Msg("Stopping continuous SNMP poller for stale device")
+					
+					// Move to stoppingSNMPPollers BEFORE calling cancelFunc
+					stoppingSNMPPollers[ip] = true
+					delete(activeSNMPPollers, ip)
+					
+					// Now call cancelFunc (asynchronous - doesn't wait for goroutine exit)
+					cancelFunc()
+				}
+			}
+			
+			snmpPollersMu.Unlock()
+
 		case <-pruningTicker.C:
 			// State Pruning: Remove devices not seen recently
 			log.Info().Msg("Pruning stale devices...")
@@ -474,56 +583,4 @@ func main() {
 			)
 		}
 	}
-}
-
-// createDailySNMPChannel creates a channel that fires at the specified time each day
-func createDailySNMPChannel(timeStr string) <-chan time.Time {
-	// Parse the time (HH:MM format)
-	var hour, minute int
-	t, err := time.Parse("15:04", timeStr)
-	if err != nil {
-		log.Warn().
-			Str("schedule", timeStr).
-			Msg("Invalid SNMP daily schedule format, using default 02:00")
-		hour, minute = 2, 0
-	} else {
-		hour = t.Hour()
-		minute = t.Minute()
-	}
-
-	ch := make(chan time.Time, 1)
-
-	go func() {
-		// Panic recovery for daily SNMP scheduler
-		defer func() {
-			if r := recover(); r != nil {
-				log.Error().
-					Interface("panic", r).
-					Msg("Daily SNMP scheduler panic recovered")
-			}
-		}()
-
-		for {
-			// Calculate duration until next scheduled time
-			now := time.Now()
-			nextRun := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
-			if nextRun.Before(now) {
-				nextRun = nextRun.Add(24 * time.Hour)
-			}
-			durationUntilNext := time.Until(nextRun)
-
-			log.Info().
-				Time("next_run", nextRun).
-				Dur("wait_duration", durationUntilNext).
-				Msg("Next daily SNMP scan scheduled")
-
-			// Wait until the scheduled time
-			time.Sleep(durationUntilNext)
-
-			// Send the tick
-			ch <- time.Now()
-		}
-	}()
-
-	return ch
 }
