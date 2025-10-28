@@ -24,18 +24,21 @@ User Browser ----HTTP----> localhost:8086 -----> InfluxDB Container
 ### After
 ```
 User Browser ----HTTPS----> localhost:443 -----> Nginx Container ----HTTP----> InfluxDB Container
-                (secure)                         (SSL termination)              (port not exposed)
+                (secure)                         (SSL termination)              (127.0.0.1:8086 - localhost only)
                                                        |
                                                        v
                                                  localhost:80
                                               (redirects to HTTPS)
 ```
 
-### Internal Service Communication (Unchanged)
+### Internal Service Communication
 ```
-netscan Container ----HTTP----> influxdb:8086 -----> InfluxDB Container
-                   (Docker network)                  (internal only)
+netscan Container ----HTTP----> localhost:8086 -----> InfluxDB Container
+       (host network)          (bound to 127.0.0.1)  (port 8086)
 ```
+
+**Note:** The netscan service uses `network_mode: host`, so it accesses InfluxDB via `localhost:8086`. 
+For security, InfluxDB port 8086 is bound to `127.0.0.1` (localhost only), not `0.0.0.0` (all interfaces).
 
 ## Files Created
 
@@ -79,8 +82,9 @@ netscan Container ----HTTP----> influxdb:8086 -----> InfluxDB Container
   - Depends on influxdb service
   - Log rotation configured
 - Modified `influxdb` service
-  - Removed `ports: - "8086:8086"` (no longer exposed to host)
-  - Added comments explaining internal-only access
+  - Changed port binding to `127.0.0.1:8086:8086` (localhost-only access)
+  - Added comments explaining netscan needs localhost access due to `network_mode: host`
+  - External browser access via nginx proxy on port 443
 
 ### 2. README.md
 **Changes:**

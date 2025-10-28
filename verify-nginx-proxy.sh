@@ -47,13 +47,14 @@ else
 fi
 echo
 
-# Check if influxdb port 8086 is NOT exposed
-echo "4. Verifying InfluxDB port is not exposed to host..."
-if docker compose config | grep -A 10 "influxdb:" | grep -q "8086:8086"; then
-    echo "   ✗ InfluxDB port 8086 is still exposed to host (should be removed)"
-    exit 1
+# Check if influxdb port 8086 is bound to localhost only
+echo "4. Verifying InfluxDB port binding..."
+if docker compose config | grep -A 20 "influxdb:" | grep "host_ip: 127.0.0.1" | grep -q "127.0.0.1"; then
+    echo "   ✓ InfluxDB port 8086 is bound to localhost only (127.0.0.1)"
 else
-    echo "   ✓ InfluxDB port 8086 is not exposed to host"
+    echo "   ✗ InfluxDB port configuration incorrect"
+    echo "     Expected: host_ip: 127.0.0.1 (localhost-only binding)"
+    exit 1
 fi
 echo
 

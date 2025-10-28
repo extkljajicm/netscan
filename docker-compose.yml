@@ -60,8 +60,11 @@ services:
   influxdb:
     image: influxdb:2.7
     container_name: influxdbv2
-    # Port 8086 is no longer exposed to host - access via nginx proxy on port 443
-    # Internal services (netscan) can still access influxdb:8086 within Docker network
+    # Port 8086 exposed to host for internal service communication
+    # The netscan service uses network_mode: host and needs to connect via localhost:8086
+    # For external browser access, use the nginx proxy at https://localhost (port 443)
+    ports:
+      - "127.0.0.1:8086:8086"  # Bind to localhost only for security
     
     # InfluxDB initialization environment variables
     # Docker Compose automatically loads .env file from project directory if it exists
