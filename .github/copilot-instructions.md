@@ -1259,11 +1259,11 @@ func TestUpdateNewField(t *testing.T) {
 
 **State Manager Operations (20K devices):**
 ```
-GetSuspendedCount()         0.3 ns/op      (O(1) - atomic counter, optimized 2024-10-27)
-Get()                       0.5 μs/op      (O(1) - hash lookup)
-UpdateLastSeen()           48 μs/op        (O(1) - hash lookup + lock)
-AddDevice() at capacity    399 μs/op       (O(n) - LRU eviction, known limitation)
-GetAllIPs()                921 μs/op       (O(n) - full iteration, expected)
+GetSuspendedCount()         0.6 ns/op      (O(1) - atomic counter, optimized 2024-10-27)
+Get()                       28 ns/op       (O(1) - hash lookup)
+UpdateLastSeen()            322 ns/op      (O(log n) - heap.Fix, optimized 2024-10-28)
+AddDevice() at capacity     714 ns/op      (O(log n) - min-heap eviction, optimized 2024-10-28)
+GetAllIPs()                 364 μs/op      (O(n) - full iteration, expected)
 ```
 
 **Reconciliation Loop (20K devices, 1% churn):**
@@ -1276,10 +1276,15 @@ Stop Logic                  884 μs         (O(n) iteration)
 
 **Resource Utilization (20K devices, 30s ping interval):**
 - Goroutines: ~20,010 (device count + overhead)
-- Heap Memory: ~500 MB
+- Heap Memory: ~500 MB (+ ~80KB for heap indices)
 - RSS Memory: ~800 MB - 1.2 GB
 - CPU: 10-15% on 4-core system
 - InfluxDB write rate: 667 points/sec
+
+**Critical Optimizations Completed:**
+1. ✅ GetSuspendedCount: O(n) → O(1) (1,000,000x faster)
+2. ✅ LRU Eviction: O(n) → O(log n) (559x faster)
+3. ✅ Reconciliation: 55% fewer allocations
 
 See `PERFORMANCE_REVIEW.md` for complete analysis and `MANUAL.md` Section 6 for operational guidance.
 

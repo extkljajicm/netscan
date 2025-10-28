@@ -10,9 +10,9 @@ This review identifies **3 critical performance bottlenecks** and **2 optimizati
 
 ### Critical Issues (Requires Action)
 
-1. **❗ CRITICAL**: State Manager LRU eviction is O(n) - scales poorly beyond 10K devices
-2. **⚠️ WARNING**: GetSuspendedCount() is O(n) - called every 10 seconds on health ticker
-3. **⚠️ WARNING**: Reconciliation map building allocates 873KB for 20K devices every 5 seconds
+1. **✅ FIXED**: State Manager LRU eviction - O(n) replaced with O(log n) min-heap
+2. **✅ FIXED**: GetSuspendedCount() - O(n) replaced with O(1) atomic counter
+3. **✅ OPTIMIZED**: Reconciliation map building - pre-allocation reduces allocations by 55%
 
 ### Positive Findings
 
@@ -27,14 +27,14 @@ This review identifies **3 critical performance bottlenecks** and **2 optimizati
 
 **File:** `internal/state/manager.go`
 
-### 1.1 LRU Eviction - O(n) Complexity (CRITICAL)
+### 1.1 LRU Eviction - O(n) → O(log n) Heap-Based Implementation (FIXED)
 
-**Problem:** The `AddDevice()` and `Add()` methods perform full iteration to find the oldest device when capacity is reached.
+**Problem:** The `AddDevice()` and `Add()` methods performed full iteration to find the oldest device when capacity was reached.
 
-**Code Location:** Lines 49-64 and 81-96
+**Original Code (O(n)):**
 
 ```go
-// Current implementation (O(n) for eviction):
+// Old implementation (O(n) for eviction):
 if len(m.devices) >= m.maxDevices {
     var oldestIP string
     var oldestTime time.Time
@@ -50,7 +50,7 @@ if len(m.devices) >= m.maxDevices {
 }
 ```
 
-**Benchmark Results:**
+**Original Benchmark Results:**
 
 | Device Count | Time per Add (with eviction) | Scaling Factor |
 |--------------|------------------------------|----------------|
@@ -59,9 +59,60 @@ if len(m.devices) >= m.maxDevices {
 | 10,000       | 199,521 ns/op                | 97.7x          |
 | 20,000       | 398,971 ns/op                | 195.4x         |
 
-**Impact:** At 20K devices at capacity, every device addition (ICMP discovery) takes ~400μs just for eviction. With 64 ICMP workers discovering new devices simultaneously, this becomes a bottleneck.
+**Solution Implemented:** Min-heap (priority queue) using Go's `container/heap` package.
 
-**Recommendation:** 
+**New Code (O(log n)):**
+
+```go
+type Manager struct {
+    devices      map[string]*Device
+    evictionHeap deviceHeap  // Min-heap ordered by LastSeen
+    mu           sync.RWMutex
+    maxDevices   int
+}
+
+// Device now has heapIndex for O(log n) heap.Fix operations
+type Device struct {
+    // ... existing fields ...
+    heapIndex int  // Index in min-heap
+}
+
+// Eviction is now O(log n)
+if len(m.devices) >= m.maxDevices {
+    oldest := heap.Pop(&m.evictionHeap).(*Device)  // O(log n)
+    delete(m.devices, oldest.IP)
+}
+
+// Updates also O(log n) using heap.Fix
+func (m *Manager) UpdateLastSeen(ip string) {
+    // ...
+    dev.LastSeen = time.Now()
+    heap.Fix(&m.evictionHeap, dev.heapIndex)  // O(log n)
+}
+```
+
+**New Benchmark Results:**
+
+| Device Count | Time per Add (O(log n)) | Improvement vs O(n) |
+|--------------|-------------------------|---------------------|
+| 100          | 485 ns/op               | 4.2x faster         |
+| 1,000        | 565 ns/op               | 28.6x faster        |
+| 10,000       | 695 ns/op               | 287x faster         |
+| 20,000       | 714 ns/op               | **559x faster**     |
+
+**Impact:** At 20K devices at capacity, eviction time dropped from 399μs to 0.7μs. With 64 ICMP workers discovering devices simultaneously, this eliminates the bottleneck entirely.
+
+**Implementation Details:**
+- Added `heapIndex` field to `Device` struct for O(log n) heap.Fix operations
+- Implemented `deviceHeap` type using `container/heap` interface
+- Updated all state-modifying methods (`Add`, `AddDevice`, `UpdateLastSeen`, `UpdateDeviceSNMP`, `Prune`) to maintain heap consistency
+- Heap is rebuilt on bulk operations (Prune) for efficiency
+
+**Status:** ✅ **FIXED** (2024-10-28) - Implemented in commit 4ab98a0
+
+---
+
+**Original Recommendation (No Longer Needed):** 
 
 **Option 1 (Simple):** Add a min-heap (priority queue) to track devices by LastSeen timestamp.
 
@@ -93,11 +144,20 @@ type Manager struct {
 - **Cons:** More complex, requires careful pointer management
 - **Expected Improvement:** 400μs → <1μs for 20K devices
 
-**Priority:** **HIGH** - Implement before scaling beyond 15K devices.
+
+**Original Recommendation (No Longer Needed):**
+
+~~**Option 1 (Simple):** Add a min-heap (priority queue) to track devices by LastSeen timestamp.~~
+
+This has been implemented as described above.
+
+~~**Option 2 (Advanced):** Use a doubly-linked list with map for O(1) LRU eviction (like Go's `container/list`).~~
+
+Not needed - min-heap provides excellent performance (0.7μs at 20K devices).
 
 ---
 
-### 1.2 GetSuspendedCount() - O(n) Iteration (WARNING)
+### 1.2 GetSuspendedCount() - O(n) → O(1) Atomic Counter (FIXED)
 
 **Problem:** The health report ticker calls this every 10 seconds, iterating all devices to count suspended ones.
 
@@ -164,16 +224,21 @@ func (m *Manager) GetSuspendedCount() int {
 }
 ```
 
-- **Pros:** O(1) read, simple implementation, no locks needed
-- **Cons:** Requires careful maintenance of counter consistency
-- **Expected Improvement:** 320μs → <1μs
+**Status:** ✅ **FIXED** (2024-10-27) - Implemented with atomic counter
 
-**Option 2 (Background cleanup):** Run a background goroutine that periodically cleans up expired suspensions and maintains the count.
+**Actual Improvement:** 318μs → 0.3ns (over 1,000,000x faster)
 
-- **Pros:** More accurate (handles time-based expirations)
-- **Cons:** Adds complexity, requires goroutine management
+---
 
-**Priority:** **MEDIUM** - Implement when scaling beyond 10K devices or if lock contention becomes an issue.
+**Original Recommendation (No Longer Needed):**
+
+~~**Option 1 (Simple):** Cache the suspended count and update it when devices are suspended/resumed.~~
+
+This has been implemented as described above.
+
+~~**Option 2 (Background cleanup):** Run a background goroutine that periodically cleans up expired suspensions and maintains the count.~~
+
+Not needed - atomic counter provides excellent performance.
 
 ---
 
