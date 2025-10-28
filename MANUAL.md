@@ -1074,8 +1074,6 @@ The StateManager implements dual independent circuit breakers (ICMP and SNMP) to
 
 **Independence:** ICMP and SNMP circuit breakers operate independently. A device may have ICMP monitoring suspended while SNMP polling continues, or vice versa.
 
-- **`ReportPingSuccess(ip)`**: Resets `ConsecutiveFails` to 0 and clears `SuspendedUntil` on any successful ping.
-
 **LRU Eviction:**
 - Triggered when `len(devices) >= maxDevices`
 - Iterates all devices to find oldest `LastSeen` timestamp
@@ -1958,7 +1956,7 @@ The circuit breaker automatically suspends ICMP ping monitoring for devices that
 | Parameter | Type | Default | Required | Description |
 |-----------|------|---------|----------|-------------|
 | `icmp_workers` | `int` | `64` | No | Number of concurrent goroutines for ICMP discovery sweeps. **Tuning:** Small networks (<500 devices): 64; Medium (500-2000): 128; Large (2000+): 256. **Warning:** Values >256 may cause kernel socket buffer overflow. |
-| `snmp_workers` | `int` | `32` | No | Number of concurrent goroutines for **initial** SNMP scan after device discovery. **Note:** Continuous SNMP polling uses per-device goroutines controlled by `snmp_interval`, not this worker pool. **Recommended:** 25-50% of `icmp_workers` to avoid overwhelming SNMP agents during discovery. |
+| `snmp_workers` | `int` | `32` | No | Number of concurrent goroutines for **initial** SNMP scan after device discovery. **Note:** Continuous SNMP polling uses per-device goroutines controlled by `snmp_interval`, not this worker pool. This parameter now has limited impact on steady-state operation. **Recommended:** 25-50% of `icmp_workers` to avoid overwhelming SNMP agents during discovery bursts. **Future:** May be deprecated in favor of rate-limited continuous polling. |
 
 #### InfluxDB Settings
 
