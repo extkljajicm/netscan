@@ -110,7 +110,7 @@ The `.env` file is automatically loaded by Docker Compose. Variables are expande
 >    docker compose up -d
 >    ```
 >
-> **Alternative (preserving data):** Instead of destroying the volume, you can change credentials directly in the InfluxDB UI (http://localhost:8086) and then update the `.env` file to match. However, this is more complex and error-prone. For testing environments, using `docker compose down -v` is simpler.
+> **Alternative (preserving data):** Instead of destroying the volume, you can change credentials directly in the InfluxDB UI (https://localhost) and then update the `.env` file to match. However, this is more complex and error-prone. For testing environments, using `docker compose down -v` is simpler.
 
 #### 4. Start the Stack
 
@@ -155,7 +155,15 @@ Expected output from health endpoint:
 
 #### 6. Access InfluxDB UI (Optional)
 
-Navigate to http://localhost:8086 in your browser:
+Navigate to **https://localhost** in your browser:
+
+> **⚠️ Self-Signed Certificate Warning:** You will see a browser security warning because the SSL certificate is self-signed (for local development/testing). This is expected and safe for local use. 
+>
+> **To proceed:**
+> - **Chrome/Edge:** Click "Advanced" → "Proceed to localhost (unsafe)"
+> - **Firefox:** Click "Advanced" → "Accept the Risk and Continue"
+> - **Safari:** Click "Show Details" → "visit this website"
+
 - **Username:** `admin`
 - **Password:** `admin123` (or your `.env` value)
 - **Organization:** `test-org`
@@ -304,7 +312,7 @@ docker compose up -d
 
 **⚠️ Warning:** The `-v` flag permanently deletes the `influxdbv2-data` volume containing all historical monitoring data. Only use this if you need to reset credentials or start fresh.
 
-**Alternative (preserving data):** Change credentials directly in the InfluxDB UI at http://localhost:8086, then update your `.env` file to match the new credentials.
+**Alternative (preserving data):** Change credentials directly in the InfluxDB UI at https://localhost, then update your `.env` file to match the new credentials.
 
 #### Issue: Health check endpoint returns 503 "NOT READY"
 
@@ -313,8 +321,8 @@ docker compose up -d
 **Solution:**
 1. Check `/health/ready` endpoint: `curl http://localhost:8080/health/ready`
 2. Check `/health` for details: `curl http://localhost:8080/health | jq .influxdb_ok`
-3. Verify InfluxDB is accessible: `curl http://localhost:8086/health`
-4. Check network connectivity between containers
+3. Verify InfluxDB is accessible via HTTPS proxy: `curl -k https://localhost/health`
+4. Check Docker network connectivity: `docker exec netscan wget -qO- http://influxdb:8086/health`
 
 #### Issue: Permission denied errors for ICMP
 
@@ -1245,11 +1253,15 @@ docker compose up -d influxdb
 ```
 
 This creates:
-- InfluxDB container on port 8086
+- InfluxDB container accessible at https://localhost (via nginx proxy)
 - Organization: `test-org`
 - Admin token: `netscan-token`
 - Primary bucket: `netscan`
 - Health bucket: `health`
+
+Access InfluxDB UI at **https://localhost**
+
+> **⚠️ Note:** The docker-compose stack includes an nginx proxy for secure HTTPS access. You'll see a self-signed certificate warning in your browser - this is expected for local development.
 
 Access InfluxDB UI at http://localhost:8086
 - Username: `admin`
@@ -1274,12 +1286,12 @@ docker run -d \
 
 ```bash
 # Via CLI
-docker exec influxdb influx bucket create \
+docker exec influxdbv2 influx bucket create \
   -n health \
   -o test-org \
   -t netscan-token
 
-# Or via UI at http://localhost:8086
+# Or via UI at https://localhost
 ```
 
 ### Configure for Development
