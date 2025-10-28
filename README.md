@@ -62,7 +62,10 @@ curl http://localhost:8080/health
 ```
 
 **Access InfluxDB UI (optional):**  
-Navigate to http://localhost:8086
+Navigate to **https://localhost** in your browser
+
+> **⚠️ Self-Signed Certificate Warning:** You will see a security warning because the SSL certificate is self-signed (for development/testing). This is expected. Click "Advanced" → "Proceed to localhost" (or similar, depending on your browser) to continue.
+
 * Username: `admin`
 * Password: `admin123`
 * Organization: `test-org`
