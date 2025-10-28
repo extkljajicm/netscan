@@ -1,7 +1,9 @@
 package state
 
 import (
+	"container/heap"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -13,61 +15,125 @@ type Device struct {
 	LastSeen         time.Time // Timestamp of last successful discovery
 	ConsecutiveFails int       // Number of consecutive ping failures (circuit breaker)
 	SuspendedUntil   time.Time // Timestamp until which device is suspended (circuit breaker)
+	heapIndex        int       // Index in the min-heap for O(log n) eviction (internal use only)
 }
 
-// Manager provides thread-safe device state management
+// deviceHeap implements heap.Interface for min-heap ordered by LastSeen timestamp
+// This enables O(log n) LRU eviction instead of O(n) iteration
+type deviceHeap []*Device
+
+func (h deviceHeap) Len() int { return len(h) }
+
+func (h deviceHeap) Less(i, j int) bool {
+	// Min-heap: oldest (smallest LastSeen) at top
+	return h[i].LastSeen.Before(h[j].LastSeen)
+}
+
+func (h deviceHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].heapIndex = i
+	h[j].heapIndex = j
+}
+
+func (h *deviceHeap) Push(x interface{}) {
+	n := len(*h)
+	device := x.(*Device)
+	device.heapIndex = n
+	*h = append(*h, device)
+}
+
+func (h *deviceHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	device := old[n-1]
+	old[n-1] = nil         // Avoid memory leak
+	device.heapIndex = -1  // Mark as not in heap
+	*h = old[0 : n-1]
+	return device
+}
+
+// Manager provides thread-safe device state management with O(log n) LRU eviction
 type Manager struct {
-	devices    map[string]*Device // Map IP addresses to device pointers
-	mu         sync.RWMutex       // Protects concurrent access to devices map
-	maxDevices int                // Maximum number of devices to manage
+	devices        map[string]*Device // Map IP addresses to device pointers
+	evictionHeap   deviceHeap         // Min-heap for O(log n) LRU eviction
+	mu             sync.RWMutex       // Protects concurrent access to devices map and heap
+	maxDevices     int                // Maximum number of devices to manage
+	suspendedCount atomic.Int32       // Cached count of suspended devices (for O(1) reads)
 }
 
-// NewManager creates a new device state manager
+// NewManager creates a new device state manager with heap-based LRU eviction
 func NewManager(maxDevices int) *Manager {
 	if maxDevices <= 0 {
 		maxDevices = 10000 // Default if not specified
 	}
-	return &Manager{
-		devices:    make(map[string]*Device),
-		maxDevices: maxDevices,
+	m := &Manager{
+		devices:      make(map[string]*Device),
+		evictionHeap: make(deviceHeap, 0, maxDevices),
+		maxDevices:   maxDevices,
 	}
+	heap.Init(&m.evictionHeap)
+	return m
 }
 
 // Add inserts a new device if it doesn't already exist (idempotent operation)
 // Enforces device count limits by removing oldest devices when limit is reached
+// Uses min-heap for O(log n) eviction instead of O(n) iteration
 func (m *Manager) Add(device Device) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// If device already exists, just update it
+	// If device already exists, update it
 	if existing, exists := m.devices[device.IP]; exists {
+		// Track suspension state changes for atomic counter
+		wasActivelySuspended := !existing.SuspendedUntil.IsZero() && time.Now().Before(existing.SuspendedUntil)
+		willBeActivelySuspended := !device.SuspendedUntil.IsZero() && time.Now().Before(device.SuspendedUntil)
+		
+		// Update the atomic counter based on state change
+		if !wasActivelySuspended && willBeActivelySuspended {
+			m.suspendedCount.Add(1) // Device became suspended
+		} else if wasActivelySuspended && !willBeActivelySuspended {
+			m.suspendedCount.Add(-1) // Device no longer suspended
+		}
+		
+		// Update device fields
+		oldLastSeen := existing.LastSeen
 		*existing = device
+		
+		// If LastSeen changed, update heap position (O(log n))
+		if !device.LastSeen.Equal(oldLastSeen) && existing.heapIndex >= 0 {
+			heap.Fix(&m.evictionHeap, existing.heapIndex)
+		}
 		return
 	}
 
 	// Check if we've reached the device limit
 	if len(m.devices) >= m.maxDevices {
-		// Remove the oldest device (smallest LastSeen time)
-		var oldestIP string
-		var oldestTime time.Time
-		first := true
-		for ip, dev := range m.devices {
-			if first || dev.LastSeen.Before(oldestTime) {
-				oldestIP = ip
-				oldestTime = dev.LastSeen
-				first = false
+		// Remove the oldest device using heap (O(log n) instead of O(n))
+		if m.evictionHeap.Len() > 0 {
+			oldest := heap.Pop(&m.evictionHeap).(*Device)
+			
+			// If the device being evicted was suspended, decrement counter
+			if !oldest.SuspendedUntil.IsZero() && time.Now().Before(oldest.SuspendedUntil) {
+				m.suspendedCount.Add(-1)
 			}
-		}
-		if oldestIP != "" {
-			delete(m.devices, oldestIP)
+			
+			delete(m.devices, oldest.IP)
 		}
 	}
 
 	// Add the new device
-	m.devices[device.IP] = &device
+	// If the new device is actively suspended, increment the counter
+	if !device.SuspendedUntil.IsZero() && time.Now().Before(device.SuspendedUntil) {
+		m.suspendedCount.Add(1)
+	}
+	
+	devicePtr := &device
+	m.devices[device.IP] = devicePtr
+	heap.Push(&m.evictionHeap, devicePtr)
 }
 
 // AddDevice adds a device by IP address only, returns true if it's a new device
+// Uses min-heap for O(log n) eviction instead of O(n) iteration
 func (m *Manager) AddDevice(ip string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -79,28 +145,27 @@ func (m *Manager) AddDevice(ip string) bool {
 
 	// Check if we've reached the device limit
 	if len(m.devices) >= m.maxDevices {
-		// Remove the oldest device (smallest LastSeen time)
-		var oldestIP string
-		var oldestTime time.Time
-		first := true
-		for devIP, dev := range m.devices {
-			if first || dev.LastSeen.Before(oldestTime) {
-				oldestIP = devIP
-				oldestTime = dev.LastSeen
-				first = false
+		// Remove the oldest device using heap (O(log n) instead of O(n))
+		if m.evictionHeap.Len() > 0 {
+			oldest := heap.Pop(&m.evictionHeap).(*Device)
+			
+			// If the device being evicted was suspended, decrement counter
+			if !oldest.SuspendedUntil.IsZero() && time.Now().Before(oldest.SuspendedUntil) {
+				m.suspendedCount.Add(-1)
 			}
-		}
-		if oldestIP != "" {
-			delete(m.devices, oldestIP)
+			
+			delete(m.devices, oldest.IP)
 		}
 	}
 
 	// Add the new device with minimal info
-	m.devices[ip] = &Device{
+	device := &Device{
 		IP:       ip,
 		Hostname: ip,
 		LastSeen: time.Now(),
 	}
+	m.devices[ip] = device
+	heap.Push(&m.evictionHeap, device)
 	return true
 }
 
@@ -124,15 +189,21 @@ func (m *Manager) GetAll() []Device {
 }
 
 // UpdateLastSeen refreshes the LastSeen timestamp for an existing device
+// Updates heap position to maintain LRU ordering (O(log n))
 func (m *Manager) UpdateLastSeen(ip string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if dev, exists := m.devices[ip]; exists {
 		dev.LastSeen = time.Now()
+		// Update heap position since LastSeen changed (O(log n))
+		if dev.heapIndex >= 0 {
+			heap.Fix(&m.evictionHeap, dev.heapIndex)
+		}
 	}
 }
 
 // UpdateDeviceSNMP enriches an existing device with SNMP data
+// Updates heap position since LastSeen changes (O(log n))
 func (m *Manager) UpdateDeviceSNMP(ip, hostname, sysDescr string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -140,6 +211,10 @@ func (m *Manager) UpdateDeviceSNMP(ip, hostname, sysDescr string) {
 		dev.Hostname = hostname
 		dev.SysDescr = sysDescr
 		dev.LastSeen = time.Now()
+		// Update heap position since LastSeen changed (O(log n))
+		if dev.heapIndex >= 0 {
+			heap.Fix(&m.evictionHeap, dev.heapIndex)
+		}
 	}
 }
 
@@ -155,17 +230,42 @@ func (m *Manager) GetAllIPs() []string {
 }
 
 // Prune removes devices not seen within the specified duration
+// Removes devices from both the map and heap
 func (m *Manager) Prune(olderThan time.Duration) []Device {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var removed []Device
 	cutoff := time.Now().Add(-olderThan)
+	now := time.Now()
+	
+	// Collect devices to remove
+	var toRemove []*Device
 	for ip, dev := range m.devices {
 		if dev.LastSeen.Before(cutoff) {
 			removed = append(removed, *dev)
+			toRemove = append(toRemove, dev)
+			
+			// If the pruned device was actively suspended, decrement counter
+			if !dev.SuspendedUntil.IsZero() && now.Before(dev.SuspendedUntil) {
+				m.suspendedCount.Add(-1)
+			}
 			delete(m.devices, ip)
 		}
 	}
+	
+	// Remove from heap - rebuild is more efficient for bulk removals
+	if len(toRemove) > 0 {
+		// Build new heap excluding removed devices
+		newHeap := make(deviceHeap, 0, len(m.evictionHeap)-len(toRemove))
+		for _, dev := range m.evictionHeap {
+			if _, exists := m.devices[dev.IP]; exists {
+				newHeap = append(newHeap, dev)
+			}
+		}
+		m.evictionHeap = newHeap
+		heap.Init(&m.evictionHeap)
+	}
+	
 	return removed
 }
 
@@ -186,6 +286,11 @@ func (m *Manager) ReportPingSuccess(ip string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if dev, exists := m.devices[ip]; exists {
+		// If SuspendedUntil is set (device was suspended at some point), decrement counter
+		// This handles both active suspensions and expired ones
+		if !dev.SuspendedUntil.IsZero() {
+			m.suspendedCount.Add(-1)
+		}
 		dev.ConsecutiveFails = 0
 		dev.SuspendedUntil = time.Time{} // Zero time (not suspended)
 	}
@@ -208,6 +313,7 @@ func (m *Manager) ReportPingFail(ip string, maxFails int, backoff time.Duration)
 		// Trip the circuit breaker
 		dev.ConsecutiveFails = 0 // Reset counter
 		dev.SuspendedUntil = time.Now().Add(backoff)
+		m.suspendedCount.Add(1) // Increment atomic counter
 		return true // Device is now suspended
 	}
 	
@@ -228,7 +334,16 @@ func (m *Manager) IsSuspended(ip string) bool {
 }
 
 // GetSuspendedCount returns the number of currently suspended devices
+// This uses a cached atomic counter for O(1) performance (optimized for frequent calls)
+// Note: The count may be slightly stale if suspensions have expired but haven't been cleared yet
 func (m *Manager) GetSuspendedCount() int {
+	return int(m.suspendedCount.Load())
+}
+
+// GetSuspendedCountAccurate returns an accurate count by iterating all devices
+// This is O(n) but provides the most up-to-date count including expired suspensions
+// Only use when accuracy is critical (e.g., debugging)
+func (m *Manager) GetSuspendedCountAccurate() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	

@@ -359,7 +359,8 @@ func main() {
 			
 			// Get current state IPs
 			currentIPs := stateMgr.GetAllIPs()
-			currentIPMap := make(map[string]bool)
+			// Pre-allocate map with exact capacity to avoid reallocation (performance optimization)
+			currentIPMap := make(map[string]bool, len(currentIPs))
 			for _, ip := range currentIPs {
 				currentIPMap[ip] = true
 			}
