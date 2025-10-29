@@ -1858,7 +1858,7 @@ export SNMP_COMMUNITY=private-community
 | Parameter | Type | Default | Required | Description |
 |-----------|------|---------|----------|-------------|
 | `networks` | `[]string` | *(none)* | **Yes** | List of CIDR network ranges to scan for devices (e.g., `["192.168.1.0/24", "10.0.0.0/24"]`). **Critical:** Must match your actual network or netscan will find 0 devices. |
-| `icmp_discovery_interval` | `duration` | *(none)* | **Yes** | How often to run ICMP discovery sweeps to find new devices (e.g., `"5m"` for 5 minutes). Minimum: 1 minute. **Note:** IP addresses are scanned in randomized order to obscure the scanning pattern. |
+| `icmp_discovery_interval` | `duration` | *(none)* | **Yes** | How often to run ICMP discovery sweeps to find new devices (e.g., `"5m"` for 5 minutes). Minimum: 1 minute. **Note:** Scans only usable host IPs (excludes network and broadcast addresses for /30 and larger networks); IPs are scanned in randomized order to obscure the scanning pattern. |
 | `snmp_daily_schedule` | `string` | `""` (disabled) | No | Daily SNMP scan time in HH:MM format (24-hour time). Leave empty to disable scheduled scans. Example: `"02:00"` runs at 2 AM daily. |
 
 #### SNMP Settings
@@ -2716,8 +2716,10 @@ func RunICMPSweep(ctx context.Context, networks []string, workers int, limiter *
 **Returns:** List of IP addresses that responded to pings
 
 **Behavior:**
+- Buffers all IPs from all networks, shuffles them using `math/rand.Shuffle`, then scans in randomized order to obscure scanning pattern
+- Excludes network addresses (e.g., `192.168.1.0` for /24) and broadcast addresses (e.g., `192.168.1.255` for /24) from scan
+- For /31 and /32 networks, no addresses are excluded (per RFC 3021)
 - Uses worker pool pattern with buffered channels (capacity: 256)
-- Streams IPs from CIDR ranges directly to channel (memory-efficient)
 - Each worker acquires rate limiter token before pinging
 - Uses raw ICMP sockets (`SetPrivileged(true)`)
 - 1-second timeout per ping during discovery
