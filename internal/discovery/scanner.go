@@ -717,6 +717,7 @@ func RunFullDiscovery(cfg *config.Config) []state.Device {
 
 // streamIPsFromCIDR streams IP addresses from CIDR notation directly to a channel
 // This avoids allocating memory for all IPs at once, significantly reducing memory usage
+// Network and broadcast addresses are excluded for networks /30 and larger
 func streamIPsFromCIDR(cidr string, ipChan chan<- string) {
 	ip, ipnet, err := net.ParseCIDR(cidr)
 	if err != nil {
@@ -740,22 +741,48 @@ func streamIPsFromCIDR(cidr string, ipChan chan<- string) {
 			Msg("Large network detected - scan may take significant time")
 	}
 	
-	// Stream IPs directly to channel
+	// Start from network address
+	ip = ip.Mask(ipnet.Mask)
+	
+	// For /31 and /32 networks, there are no network/broadcast addresses to skip (RFC 3021)
+	// For all other networks, skip the network address (first IP) and broadcast address (last IP)
+	skipNetworkAndBroadcast := ones < 31
+	
+	if skipNetworkAndBroadcast {
+		// Skip network address (first IP)
+		incIP(ip)
+	}
+	
+	// Stream usable host IPs directly to channel
 	count := 0
 	maxIPs := 1 << uint(hostBits) // Calculate actual network size
 	if maxIPs > 65536 {
 		maxIPs = 65536 // Safety limit
 	}
 	
-	for ip := ip.Mask(ipnet.Mask); ipnet.Contains(ip) && count < maxIPs; incIP(ip) {
+	for ipnet.Contains(ip) && count < maxIPs {
+		// For networks with network/broadcast addresses, stop before broadcast address
+		if skipNetworkAndBroadcast {
+			// Calculate broadcast address by checking if next IP would be outside network
+			nextIP := make(net.IP, len(ip))
+			copy(nextIP, ip)
+			incIP(nextIP)
+			if !ipnet.Contains(nextIP) {
+				// Current IP is the broadcast address, stop here
+				break
+			}
+		}
+		
 		ipChan <- ip.String()
 		count++
+		incIP(ip)
 	}
 }
 
 // ipsFromCIDR expands CIDR notation into individual IP addresses
 // NOTE: This function allocates memory for all IPs. For large networks, use streamIPsFromCIDR instead.
 // This is kept for backward compatibility with RunScanIPsOnly
+// Network and broadcast addresses are excluded for networks /30 and larger
 func ipsFromCIDR(cidr string) []string {
 	var ips []string
 	ip, ipnet, err := net.ParseCIDR(cidr)
@@ -776,15 +803,40 @@ func ipsFromCIDR(cidr string) []string {
 		return ips
 	}
 	
-	// Iterate through all IPs in the subnet
+	// Start from network address
+	ip = ip.Mask(ipnet.Mask)
+	
+	// For /31 and /32 networks, there are no network/broadcast addresses to skip (RFC 3021)
+	// For all other networks, skip the network address (first IP) and broadcast address (last IP)
+	skipNetworkAndBroadcast := ones < 31
+	
+	if skipNetworkAndBroadcast {
+		// Skip network address (first IP)
+		incIP(ip)
+	}
+	
+	// Iterate through usable host IPs in the subnet
 	count := 0
-	for ip := ip.Mask(ipnet.Mask); ipnet.Contains(ip); incIP(ip) {
+	for ipnet.Contains(ip) {
+		// For networks with network/broadcast addresses, stop before broadcast address
+		if skipNetworkAndBroadcast {
+			// Calculate broadcast address by checking if next IP would be outside network
+			nextIP := make(net.IP, len(ip))
+			copy(nextIP, ip)
+			incIP(nextIP)
+			if !ipnet.Contains(nextIP) {
+				// Current IP is the broadcast address, stop here
+				break
+			}
+		}
+		
 		ips = append(ips, ip.String())
 		count++
 		if count >= maxIPs {
 			// Safety limit reached
 			break
 		}
+		incIP(ip)
 	}
 	return ips
 }
