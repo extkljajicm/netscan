@@ -15,8 +15,10 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the binary with optimizations for linux/amd64
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+# Build the binary with race detector enabled for diagnostics
+# NOTE: Race detector requires CGO_ENABLED=1 and adds runtime overhead
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
+    -race \
     -ldflags="-w -s" \
     -o netscan \
     ./cmd/netscan
