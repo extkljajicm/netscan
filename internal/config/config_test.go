@@ -152,6 +152,31 @@ influxdb:
 	if cfg.InfluxDB.BatchSize != 5000 {
 		t.Errorf("expected InfluxDB.BatchSize default to be 5000, got %d", cfg.InfluxDB.BatchSize)
 	}
+	
+	// Test new SNMP continuous polling defaults
+	if cfg.SNMPInterval != 1*time.Hour {
+		t.Errorf("expected SNMPInterval default to be 1h, got %v", cfg.SNMPInterval)
+	}
+	
+	if cfg.SNMPRateLimit != 10.0 {
+		t.Errorf("expected SNMPRateLimit default to be 10.0, got %.2f", cfg.SNMPRateLimit)
+	}
+	
+	if cfg.SNMPBurstLimit != 50 {
+		t.Errorf("expected SNMPBurstLimit default to be 50, got %d", cfg.SNMPBurstLimit)
+	}
+	
+	if cfg.SNMPMaxConsecutiveFails != 5 {
+		t.Errorf("expected SNMPMaxConsecutiveFails default to be 5, got %d", cfg.SNMPMaxConsecutiveFails)
+	}
+	
+	if cfg.SNMPBackoffDuration != 1*time.Hour {
+		t.Errorf("expected SNMPBackoffDuration default to be 1h, got %v", cfg.SNMPBackoffDuration)
+	}
+	
+	if cfg.MaxConcurrentSNMPPollers != 20000 {
+		t.Errorf("expected MaxConcurrentSNMPPollers default to be 20000, got %d", cfg.MaxConcurrentSNMPPollers)
+	}
 }
 
 // TestLoadConfigEnvVarExpansion tests that environment variables are properly expanded
