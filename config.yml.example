@@ -31,14 +31,28 @@ networks:
 # How often to run ICMP discovery to find new devices
 icmp_discovery_interval: "5m"
 
-# Daily scheduled SNMP scan time (HH:MM format in 24-hour time)
-# Full SNMP scan of all known devices runs once per day at this time
-# Leave empty to disable scheduled SNMP scans (only immediate scans on device discovery)
-snmp_daily_schedule: "02:00"
-
 # =============================================================================
 # SNMP SETTINGS
 # =============================================================================
+# Continuous SNMP polling interval per device
+# How often to query each device for hostname and sysDescr via SNMP
+# Default: "1h" (poll each device every hour)
+snmp_interval: "1h"
+
+# Global SNMP query rate limiting (token bucket algorithm)
+# Controls the sustained rate of SNMP queries across all devices to prevent overwhelming SNMP agents
+# snmp_rate_limit: Tokens added per second (sustained query rate)
+# snmp_burst_limit: Token bucket capacity (max burst size)
+# Example: rate=10.0, burst=50 means 10 queries/sec sustained, up to 50 concurrent
+snmp_rate_limit: 10.0   # Default: 10 SNMP queries per second (tokens/sec)
+snmp_burst_limit: 50    # Default: 50 SNMP query burst capacity
+
+# SNMP circuit breaker settings for automatic device suspension
+# Automatically suspends SNMP polling for devices that fail SNMP queries consecutively
+# This prevents wasting resources on devices with broken/disabled SNMP agents
+snmp_max_consecutive_fails: 5    # Default: 5 consecutive SNMP failures before suspension
+snmp_backoff_duration: "1h"      # Default: 1 hour suspension after max SNMP failures
+
 # SNMPv2c community string for device authentication
 # Uses environment variable expansion (Docker: docker-compose.yml, Native: .env file)
 snmp:
@@ -113,7 +127,8 @@ health_report_interval: "10s"     # Interval for writing health metrics to Influ
 # RESOURCE PROTECTION SETTINGS
 # =============================================================================
 # Limits to prevent resource exhaustion and DoS attacks
-max_concurrent_pingers: 20000 # Maximum number of concurrent ping goroutines
-max_devices: 20000            # Maximum number of devices to monitor
-min_scan_interval: "1m"       # Minimum interval between discovery scans
-memory_limit_mb: 16384        # Memory usage limit in MB
+max_concurrent_pingers: 20000       # Maximum number of concurrent ping goroutines
+max_concurrent_snmp_pollers: 20000  # Maximum number of concurrent SNMP poller goroutines
+max_devices: 20000                  # Maximum number of devices to monitor
+min_scan_interval: "1m"             # Minimum interval between discovery scans
+memory_limit_mb: 16384              # Memory usage limit in MB

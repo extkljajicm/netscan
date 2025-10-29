@@ -7,51 +7,6 @@ import (
 	"time"
 )
 
-// TestCreateDailySNMPChannel tests the daily SNMP channel creation with various time formats
-func TestCreateDailySNMPChannel(t *testing.T) {
-	tests := []struct {
-		name       string
-		timeStr    string
-		expectFail bool
-	}{
-		{"Valid morning time", "02:00", false},
-		{"Valid afternoon time", "14:30", false},
-		{"Valid midnight", "00:00", false},
-		{"Valid end of day", "23:59", false},
-		{"Invalid format - single digit hour", "2:00", true},
-		{"Invalid format - single digit minute", "02:0", true},
-		{"Invalid hour", "25:00", true},
-		{"Invalid minute", "12:61", true},
-		{"Empty string", "", true},
-		{"Invalid characters", "ab:cd", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ch := createDailySNMPChannel(tt.timeStr)
-			
-			// Channel should always be created (falls back to default if invalid)
-			if ch == nil {
-				t.Errorf("createDailySNMPChannel() returned nil channel")
-			}
-			
-			// For valid times, verify the channel is functional
-			if !tt.expectFail {
-				// Give it a tiny bit of time to initialize
-				time.Sleep(10 * time.Millisecond)
-				
-				// Channel should be readable (non-blocking check)
-				select {
-				case <-ch:
-					// If it fires immediately, that's fine (scheduled for today)
-				default:
-					// Not fired yet, which is expected
-				}
-			}
-		})
-	}
-}
-
 // TestGracefulShutdown tests that context cancellation properly stops all tickers
 func TestGracefulShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -338,57 +293,6 @@ func TestContextCancellationPropagation(t *testing.T) {
 	}
 }
 
-// TestDailySNMPTimeCalculation tests the time calculation logic for daily SNMP scans
-func TestDailySNMPTimeCalculation(t *testing.T) {
-	now := time.Now()
-	
-	tests := []struct {
-		name           string
-		hour           int
-		minute         int
-		shouldBeToday  bool
-	}{
-		{"Future time today (safe hour)", 14, 30, now.Hour() < 14 || (now.Hour() == 14 && now.Minute() < 30)},
-		{"Past time (should be tomorrow)", (now.Hour() + 23) % 24, now.Minute(), false},
-		{"Same time (should be tomorrow if seconds have passed)", now.Hour(), now.Minute(), false},
-	}
-	
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Calculate next run time
-			scheduledTime := time.Date(now.Year(), now.Month(), now.Day(), tt.hour, tt.minute, 0, 0, now.Location())
-			
-			if scheduledTime.Before(now) || scheduledTime.Equal(now) {
-				scheduledTime = scheduledTime.Add(24 * time.Hour)
-			}
-			
-			// Verify it's in the future
-			if !scheduledTime.After(now) {
-				t.Error("Scheduled time should be in the future")
-			}
-			
-			// Verify the date
-			isToday := scheduledTime.Day() == now.Day() && 
-				scheduledTime.Month() == now.Month() && 
-				scheduledTime.Year() == now.Year()
-			
-			if isToday != tt.shouldBeToday {
-				t.Errorf("Expected shouldBeToday=%v, got %v (scheduled=%v, now=%v)", tt.shouldBeToday, isToday, scheduledTime, now)
-			}
-			
-			// Verify it's approximately 24 hours ahead if it's tomorrow
-			// Allow for a wider range since the test runs at different times of day
-			if !tt.shouldBeToday {
-				duration := scheduledTime.Sub(now)
-				// Should be at least 1 hour (if scheduled soon becomes tomorrow)
-				// and at most 48 hours (if scheduled at same time next day)
-				if duration < 1*time.Hour || duration > 48*time.Hour {
-					t.Errorf("Expected 1-48 hours until next run, got %v", duration)
-				}
-			}
-		})
-	}
-}
 
 // TestMaxPingersLimit tests the logic for enforcing maximum concurrent pingers
 func TestMaxPingersLimit(t *testing.T) {
@@ -424,37 +328,6 @@ func TestMaxPingersLimit(t *testing.T) {
 	}
 }
 
-// TestCreateDailySNMPChannelTimeParsing tests specific time parsing edge cases
-func TestCreateDailySNMPChannelTimeParsing(t *testing.T) {
-	// This test verifies the channel creation doesn't panic on various inputs
-	inputs := []string{
-		"00:00",
-		"12:00",
-		"23:59",
-		"",
-		"invalid",
-		"25:00",
-		"12:60",
-		"1:00",  // Invalid format (should be 01:00)
-		"12:5",  // Invalid format (should be 12:05)
-	}
-	
-	for _, input := range inputs {
-		t.Run("time="+input, func(t *testing.T) {
-			// Should not panic
-			defer func() {
-				if r := recover(); r != nil {
-					t.Errorf("createDailySNMPChannel panicked with input %q: %v", input, r)
-				}
-			}()
-			
-			ch := createDailySNMPChannel(input)
-			if ch == nil {
-				t.Errorf("createDailySNMPChannel returned nil for input %q", input)
-			}
-		})
-	}
-}
 
 // TestPingerMapConcurrency documents the importance of mutex protection
 // This test is skipped during race detection as it intentionally demonstrates unsafe patterns

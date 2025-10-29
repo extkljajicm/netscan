@@ -171,12 +171,17 @@ DiscoveryInterval:     4 * time.Hour,
 IcmpWorkers:           64,
 SnmpWorkers:           32,
 PingInterval:          2 * time.Second,
-PingTimeout:           3 * time.Second,
-PingRateLimit:         tt.rateLimit,
-PingBurstLimit:        tt.burstLimit,
-PingMaxConsecutiveFails: 10,              // Circuit breaker default
-PingBackoffDuration:     5 * time.Minute, // Circuit breaker default
-SNMP: SNMPConfig{
+			PingTimeout:              3 * time.Second,
+			PingRateLimit:            tt.rateLimit,
+			PingBurstLimit:           tt.burstLimit,
+			PingMaxConsecutiveFails:  10,              // Circuit breaker default
+			PingBackoffDuration:      5 * time.Minute, // Circuit breaker default
+			SNMPInterval:             1 * time.Hour,
+			SNMPRateLimit:            10.0,
+			SNMPBurstLimit:           50,
+			SNMPMaxConsecutiveFails:  5,
+			SNMPBackoffDuration:      1 * time.Hour,
+			SNMP: SNMPConfig{
 Community: "test-community",
 Port:      161,
 Timeout:   5 * time.Second,
@@ -188,10 +193,11 @@ Token:  "test-token",
 Org:    "test-org",
 Bucket: "test-bucket",
 },
-MaxConcurrentPingers: 1000,
-MaxDevices:           1000,
-MinScanInterval:      1 * time.Minute,
-MemoryLimitMB:        1024,
+MaxConcurrentPingers:     1000,
+MaxConcurrentSNMPPollers: 1000,
+MaxDevices:               1000,
+MinScanInterval:          1 * time.Minute,
+MemoryLimitMB:            1024,
 }
 
 warning, err := ValidateConfig(cfg)
