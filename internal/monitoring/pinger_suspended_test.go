@@ -2,6 +2,7 @@ package monitoring
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 // mockWriterForSuspension captures suspension status for testing
 type mockWriterForSuspension struct {
+	mu         sync.Mutex
 	writeCalls []struct {
 		ip        string
 		rtt       time.Duration
@@ -21,6 +23,8 @@ type mockWriterForSuspension struct {
 }
 
 func (m *mockWriterForSuspension) WritePingResult(ip string, rtt time.Duration, successful bool, suspended bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.writeCalls = append(m.writeCalls, struct {
 		ip        string
 		rtt       time.Duration
@@ -32,6 +36,32 @@ func (m *mockWriterForSuspension) WritePingResult(ip string, rtt time.Duration, 
 
 func (m *mockWriterForSuspension) WriteDeviceInfo(ip, hostname, sysDescr string) error {
 	return nil
+}
+
+// getWriteCallsCount safely returns the number of write calls
+func (m *mockWriterForSuspension) getWriteCallsCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.writeCalls)
+}
+
+// getWriteCalls safely returns a copy of write calls
+func (m *mockWriterForSuspension) getWriteCalls() []struct {
+	ip        string
+	rtt       time.Duration
+	success   bool
+	suspended bool
+} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]struct {
+		ip        string
+		rtt       time.Duration
+		success   bool
+		suspended bool
+	}, len(m.writeCalls))
+	copy(result, m.writeCalls)
+	return result
 }
 
 // mockStateManagerForSuspension simulates circuit breaker suspension
@@ -71,12 +101,13 @@ func TestSuspendedStatusWritten(t *testing.T) {
 	time.Sleep(1200 * time.Millisecond)
 	
 	// Verify that WritePingResult was called with suspended=true
-	if len(writer.writeCalls) == 0 {
+	writeCalls := writer.getWriteCalls()
+	if len(writeCalls) == 0 {
 		t.Fatalf("expected WritePingResult to be called, but it wasn't")
 	}
 	
 	// Check the first call
-	firstCall := writer.writeCalls[0]
+	firstCall := writeCalls[0]
 	if !firstCall.suspended {
 		t.Errorf("expected suspended=true, got suspended=%v", firstCall.suspended)
 	}
@@ -112,9 +143,12 @@ func TestNormalPingNotSuspended(t *testing.T) {
 	// Wait for the initial timer (1 second) plus some buffer
 	time.Sleep(1200 * time.Millisecond)
 	
+	// Get write calls safely
+	writeCalls := writer.getWriteCalls()
+	
 	// Check IF any calls were made (may be 0 if running without root privileges)
 	// If calls were made, they should all have suspended=false
-	for i, call := range writer.writeCalls {
+	for i, call := range writeCalls {
 		if call.suspended {
 			t.Errorf("call %d: expected suspended=false for normal ping, got suspended=%v", i, call.suspended)
 		}
@@ -126,8 +160,8 @@ func TestNormalPingNotSuspended(t *testing.T) {
 	// Note: We don't require writes to have occurred because without root privileges,
 	// the ping execution will fail with "operation not permitted" and return early
 	// without writing any result. This is existing behavior.
-	if len(writer.writeCalls) > 0 {
-		t.Logf("Verified %d ping results all had suspended=false", len(writer.writeCalls))
+	if len(writeCalls) > 0 {
+		t.Logf("Verified %d ping results all had suspended=false", len(writeCalls))
 	} else {
 		t.Logf("No ping results written (likely running without root privileges)")
 	}
@@ -152,13 +186,16 @@ func TestSuspendedWriteFrequency(t *testing.T) {
 	// Wait for initial timer (1s) + a few intervals (1s + 400ms = 1.4s total, plus buffer)
 	time.Sleep(1500 * time.Millisecond)
 	
+	// Get write calls safely
+	writeCalls := writer.getWriteCalls()
+	
 	// Should have at least 2 writes (at ~1s and ~1.2s)
-	if len(writer.writeCalls) < 2 {
-		t.Errorf("expected at least 2 writes, got %d", len(writer.writeCalls))
+	if len(writeCalls) < 2 {
+		t.Errorf("expected at least 2 writes, got %d", len(writeCalls))
 	}
 	
 	// All writes should have suspended=true
-	for i, call := range writer.writeCalls {
+	for i, call := range writeCalls {
 		if !call.suspended {
 			t.Errorf("call %d: expected suspended=true, got suspended=%v", i, call.suspended)
 		}
