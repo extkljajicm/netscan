@@ -2194,8 +2194,8 @@ Stores device metadata collected via SNMP.
 **Bucket:** Primary bucket (configured via `influxdb.bucket`)
 
 **Frequency:** 
-- Written immediately when device first discovered
-- Re-written during daily SNMP scan (if configured)
+- Written immediately when device first discovered (background SNMP enrichment)
+- Re-written periodically by continuous SNMP polling (default: every 1 hour per device)
 - Re-written when SNMP data changes
 
 **Tags:**
@@ -2600,7 +2600,7 @@ netscan/
 - Responsible for:
   - Command-line flag parsing
   - Component initialization (StateManager, InfluxDB writer, rate limiter)
-  - Main event loop orchestration (5 tickers)
+  - Main event loop orchestration (6 monitoring workflows: 5 tickers + background SNMP enrichment)
   - Graceful shutdown coordination
   - Health check HTTP server
 
