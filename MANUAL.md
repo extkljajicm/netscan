@@ -13,15 +13,16 @@ This manual provides comprehensive documentation for netscan, a production-grade
 
 ## Overview
 
-netscan is a production-grade Go network monitoring service that performs automated network device discovery and continuous uptime monitoring. The service operates through a multi-ticker event-driven architecture with five independent monitoring workflows:
+netscan is a production-grade Go network monitoring service that performs automated network device discovery and continuous uptime monitoring. The service operates through a multi-ticker event-driven architecture that concurrently executes six independent monitoring workflows:
 
-1. **ICMP Discovery** - Periodic network sweeps to find responsive devices (uses randomized scanning order)
-2. **SNMP Enrichment** - Scheduled metadata collection from discovered devices
-3. **Continuous Monitoring** - Per-device ICMP ping monitoring with rate limiting
-4. **Pinger Reconciliation** - Automatic lifecycle management of monitoring goroutines
-5. **State Pruning** - Removal of stale devices
+1. **ICMP Discovery**: Periodic ICMP ping sweeps for device discovery with randomized scanning
+2. **Pinger Reconciliation**: Automatic lifecycle management ensuring all devices have active ping monitoring
+3. **SNMP Poller Reconciliation**: Automatic lifecycle management ensuring all devices have active SNMP polling
+4. **State Pruning**: Removal of stale devices not seen in 24 hours
+5. **Health Reporting**: Continuous metrics export to InfluxDB health bucket
+6. **Background Operations**: SNMP enrichment for newly discovered devices
 
-All discovered devices are stored in a central StateManager (single source of truth), and all metrics are written to InfluxDB v2 using an optimized batching system.
+All discovered devices are stored in a central StateManager (the single source of truth), and all metrics are written to InfluxDB v2 using an optimized batching system. The service implements comprehensive concurrency safety through mutexes, context-based cancellation, WaitGroups, and panic recovery throughout all goroutines. Deployment is supported via Docker Compose with InfluxDB or native systemd installation with capability-based security.
 
 **Deployment Options:**
 - **Docker Deployment (Recommended)** - Easiest path with automatic orchestration
@@ -912,9 +913,11 @@ netscan is built with production-grade concurrency patterns, comprehensive error
 
 ### Multi-Ticker Event-Driven Design
 
-netscan implements a sophisticated event-driven architecture with five independent, concurrent monitoring workflows orchestrated in `cmd/netscan/main.go`. All tickers run within a single `select` statement in the main event loop and are controlled by a shared context for coordinated graceful shutdown.
+netscan implements a sophisticated event-driven architecture with six independent, concurrent monitoring workflows orchestrated in `cmd/netscan/main.go`. Five workflows are implemented as tickers that run within a single `select` statement in the main event loop, and one workflow consists of background goroutines. All components are controlled by a shared context for coordinated graceful shutdown.
 
-**The Five Tickers:**
+**The Six Monitoring Workflows:**
+
+Five are implemented as tickers, plus background SNMP enrichment:
 
 #### 1. ICMP Discovery Ticker (`icmpDiscoveryTicker`)
 
@@ -1027,6 +1030,27 @@ netscan implements a sophisticated event-driven architecture with five independe
    - InfluxDB connectivity status
    - Successful/failed batch counts
    - Total pings sent
+
+#### 6. Background Operations (Non-Ticker Workflow)
+
+**Trigger:** Launched when ICMP Discovery Ticker finds a new device
+
+**Purpose:** SNMP enrichment for newly discovered devices to collect metadata immediately
+
+**Operation Flow:**
+1. ICMP Discovery Ticker calls `stateMgr.AddDevice(ip)` for each responsive IP
+2. If device is new (`isNew == true`), launches background goroutine immediately
+3. Background goroutine performs SNMP scan via `discovery.RunSNMPScan()`
+4. Queries standard MIB-II OIDs for hostname (sysName) and description (sysDescr)
+5. Writes SNMP results to StateManager via `stateMgr.UpdateDeviceSNMP()`
+6. Writes device info to InfluxDB via `writer.WriteDeviceInfo()`
+
+**Concurrency:** 
+- Each new device gets its own background goroutine for SNMP scanning
+- Goroutines run in parallel without blocking discovery loop
+- Includes panic recovery to prevent single SNMP failure from affecting service
+
+**Note:** This is not a ticker but background goroutines spawned by the ICMP Discovery Ticker. After initial enrichment, continuous SNMP polling is handled by the SNMP Poller Reconciliation Ticker.
 
 ### Core Components
 
@@ -2170,8 +2194,8 @@ Stores device metadata collected via SNMP.
 **Bucket:** Primary bucket (configured via `influxdb.bucket`)
 
 **Frequency:** 
-- Written immediately when device first discovered
-- Re-written during daily SNMP scan (if configured)
+- Written immediately when device first discovered (background SNMP enrichment)
+- Re-written periodically by continuous SNMP polling (default: every 1 hour per device)
 - Re-written when SNMP data changes
 
 **Tags:**
@@ -2576,7 +2600,7 @@ netscan/
 - Responsible for:
   - Command-line flag parsing
   - Component initialization (StateManager, InfluxDB writer, rate limiter)
-  - Main event loop orchestration (5 tickers)
+  - Main event loop orchestration (6 monitoring workflows: 5 tickers + background SNMP enrichment)
   - Graceful shutdown coordination
   - Health check HTTP server
 
