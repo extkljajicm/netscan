@@ -345,10 +345,18 @@ func (m *Manager) ReportPingFail(ip string, maxFails int, backoff time.Duration)
 	
 	// Check if we've reached the threshold
 	if dev.ConsecutiveFails >= maxFails {
+		// Check if device is already actively suspended
+		wasAlreadySuspended := !dev.SuspendedUntil.IsZero() && time.Now().Before(dev.SuspendedUntil)
+		
 		// Trip the circuit breaker
 		dev.ConsecutiveFails = 0 // Reset counter
 		dev.SuspendedUntil = time.Now().Add(backoff)
-		m.suspendedCount.Add(1) // Increment atomic counter
+		
+		// Only increment counter if device was NOT already suspended
+		if !wasAlreadySuspended {
+			m.suspendedCount.Add(1) // Increment atomic counter
+		}
+		
 		return true // Device is now suspended
 	}
 	
@@ -422,10 +430,18 @@ func (m *Manager) ReportSNMPFail(ip string, maxFails int, backoff time.Duration)
 	
 	// Check if we've reached the threshold
 	if dev.SNMPConsecutiveFails >= maxFails {
+		// Check if SNMP polling is already actively suspended
+		wasAlreadySuspended := !dev.SNMPSuspendedUntil.IsZero() && time.Now().Before(dev.SNMPSuspendedUntil)
+		
 		// Trip the circuit breaker
 		dev.SNMPConsecutiveFails = 0 // Reset counter
 		dev.SNMPSuspendedUntil = time.Now().Add(backoff)
-		m.snmpSuspendedCount.Add(1) // Increment atomic counter
+		
+		// Only increment counter if SNMP polling was NOT already suspended
+		if !wasAlreadySuspended {
+			m.snmpSuspendedCount.Add(1) // Increment atomic counter
+		}
+		
 		return true // SNMP polling is now suspended
 	}
 	
