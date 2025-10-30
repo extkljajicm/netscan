@@ -245,7 +245,8 @@ func (w *Writer) WriteHealthMetrics(deviceCount, pingerCount, goroutines, memMB,
 }
 
 // WritePingResult writes ICMP ping metrics to InfluxDB (optimized for time-series)
-func (w *Writer) WritePingResult(ip string, rtt time.Duration, successful bool) error {
+// The suspended parameter indicates whether the device is currently suspended by the circuit breaker
+func (w *Writer) WritePingResult(ip string, rtt time.Duration, successful bool, suspended bool) error {
 	// Validate IP address
 	if err := validateIPAddress(ip); err != nil {
 		return fmt.Errorf("invalid IP address for ping result: %v", err)
@@ -263,8 +264,9 @@ func (w *Writer) WritePingResult(ip string, rtt time.Duration, successful bool) 
 		"ping",
 		map[string]string{"ip": ip},
 		map[string]interface{}{
-			"rtt_ms":  float64(rtt.Nanoseconds()) / 1e6,
-			"success": successful,
+			"rtt_ms":    float64(rtt.Nanoseconds()) / 1e6,
+			"success":   successful,
+			"suspended": suspended,
 		},
 		time.Now(),
 	)

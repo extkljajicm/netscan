@@ -16,17 +16,19 @@ type mockWriter struct {
 	ip               string
 	rtt              time.Duration
 	success          bool
+	suspended        bool
 	deviceInfoCalled bool
 	deviceIP         string
 	deviceHostname   string
 }
 
 // Satisfy influx.Writer interface
-func (m *mockWriter) WritePingResult(ip string, rtt time.Duration, successful bool) error {
+func (m *mockWriter) WritePingResult(ip string, rtt time.Duration, successful bool, suspended bool) error {
 	m.called = true
 	m.ip = ip
 	m.rtt = rtt
 	m.success = successful
+	m.suspended = suspended
 	return nil
 }
 

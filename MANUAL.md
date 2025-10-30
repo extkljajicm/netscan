@@ -2123,14 +2123,22 @@ Stores ICMP ping results for continuous uptime monitoring.
 **Fields:**
 | Field | Type | Unit | Description | Example |
 |-------|------|------|-------------|---------|
-| `rtt_ms` | float64 | milliseconds | Round-trip time for successful pings. `0.0` for failed pings. | `12.5` |
-| `success` | bool | n/a | Ping success status. `true` if device responded, `false` if timeout. | `true` |
+| `rtt_ms` | float64 | milliseconds | Round-trip time for successful pings. `0.0` for failed pings or suspended devices. | `12.5` |
+| `success` | bool | n/a | Ping success status. `true` if device responded, `false` if timeout or suspended. | `true` |
+| `suspended` | bool | n/a | Circuit breaker suspension status. `true` if device is suspended (circuit breaker tripped), `false` for normal operation. When `true`, ping was skipped to conserve resources. | `false` |
 
 **Timestamp:** Time when ping was executed (not when response received)
 
-**Example Data Point:**
+**Example Data Points:**
 ```
-ping,ip=192.168.1.100 rtt_ms=12.5,success=true 1698765432000000000
+# Normal successful ping
+ping,ip=192.168.1.100 rtt_ms=12.5,success=true,suspended=false 1698765432000000000
+
+# Failed ping (timeout)
+ping,ip=192.168.1.100 rtt_ms=0.0,success=false,suspended=false 1698765433000000000
+
+# Suspended device (circuit breaker tripped)
+ping,ip=192.168.1.100 rtt_ms=0.0,success=false,suspended=true 1698765434000000000
 ```
 
 **Sample Flux Query (Last 24h ping success rate by device):**
@@ -2141,6 +2149,18 @@ from(bucket: "netscan")
   |> filter(fn: (r) => r._field == "success")
   |> group(columns: ["ip"])
   |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
+```
+
+**Sample Flux Query (Find currently suspended devices):**
+```flux
+from(bucket: "netscan")
+  |> range(start: -5m)
+  |> filter(fn: (r) => r._measurement == "ping")
+  |> filter(fn: (r) => r._field == "suspended")
+  |> filter(fn: (r) => r._value == true)
+  |> group(columns: ["ip"])
+  |> last()
+  |> keep(columns: ["ip", "_time"])
 ```
 
 ### Measurement: `device_info`
