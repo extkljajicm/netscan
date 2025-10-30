@@ -13,15 +13,16 @@ This manual provides comprehensive documentation for netscan, a production-grade
 
 ## Overview
 
-netscan is a production-grade Go network monitoring service that performs automated network device discovery and continuous uptime monitoring. The service operates through a multi-ticker event-driven architecture with five independent monitoring workflows:
+netscan is a production-grade Go network monitoring service that performs automated network device discovery and continuous uptime monitoring. The service operates through a multi-ticker event-driven architecture that concurrently executes six independent monitoring workflows:
 
-1. **ICMP Discovery** - Periodic network sweeps to find responsive devices (uses randomized scanning order)
-2. **SNMP Enrichment** - Scheduled metadata collection from discovered devices
-3. **Continuous Monitoring** - Per-device ICMP ping monitoring with rate limiting
-4. **Pinger Reconciliation** - Automatic lifecycle management of monitoring goroutines
-5. **State Pruning** - Removal of stale devices
+1. **ICMP Discovery**: Periodic ICMP ping sweeps for device discovery with randomized scanning
+2. **Pinger Reconciliation**: Automatic lifecycle management ensuring all devices have active ping monitoring
+3. **SNMP Poller Reconciliation**: Automatic lifecycle management ensuring all devices have active SNMP polling
+4. **State Pruning**: Removal of stale devices not seen in 24 hours
+5. **Health Reporting**: Continuous metrics export to InfluxDB health bucket
+6. **Background Operations**: SNMP enrichment for newly discovered devices
 
-All discovered devices are stored in a central StateManager (single source of truth), and all metrics are written to InfluxDB v2 using an optimized batching system.
+All discovered devices are stored in a central StateManager (the single source of truth), and all metrics are written to InfluxDB v2 using an optimized batching system. The service implements comprehensive concurrency safety through mutexes, context-based cancellation, WaitGroups, and panic recovery throughout all goroutines. Deployment is supported via Docker Compose with InfluxDB or native systemd installation with capability-based security.
 
 **Deployment Options:**
 - **Docker Deployment (Recommended)** - Easiest path with automatic orchestration
