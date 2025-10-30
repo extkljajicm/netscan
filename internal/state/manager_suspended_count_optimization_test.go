@@ -108,15 +108,15 @@ func TestSuspendedCountExpiration(t *testing.T) {
 	// Wait for suspension to expire
 	time.Sleep(200 * time.Millisecond)
 
-	// Cached count still shows 1 (not time-aware) - this is expected and documented
+	// With the fix, GetSuspendedCount() now cleans up expired suspensions automatically
 	cachedCount := mgr.GetSuspendedCount()
 
-	// Accurate count should show 0 (checks expiration)
+	// Accurate count should also show 0 (checks expiration)
 	accurateCount := mgr.GetSuspendedCountAccurate()
 
-	// Note: This is expected behavior - cached count is slightly stale until next ping
-	if cachedCount != 1 {
-		t.Errorf("Expected cached count to be 1 (stale until next ping), got %d", cachedCount)
+	// Both should now be 0 (expired suspension is cleaned up when count is read)
+	if cachedCount != 0 {
+		t.Errorf("Expected cached count to be 0 (expired and cleaned up), got %d", cachedCount)
 	}
 
 	if accurateCount != 0 {
