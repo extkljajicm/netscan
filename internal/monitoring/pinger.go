@@ -17,7 +17,7 @@ import (
 
 // PingWriter interface for writing ping results to external storage
 type PingWriter interface {
-	WritePingResult(ip string, rtt time.Duration, successful bool) error
+	WritePingResult(ip string, rtt time.Duration, successful bool, suspended bool) error
 	WriteDeviceInfo(ip, hostname, sysDescr string) error
 }
 
@@ -59,6 +59,15 @@ func StartPinger(ctx context.Context, wg *sync.WaitGroup, device state.Device, i
 			// 1. CHECK CIRCUIT BREAKER *BEFORE* ACQUIRING TOKEN
 			if stateMgr.IsSuspended(device.IP) {
 				log.Debug().Str("ip", device.IP).Msg("Device ping is suspended (circuit breaker), skipping.")
+				
+				// Write suspension status to InfluxDB so we can track which devices are suspended
+				if err := writer.WritePingResult(device.IP, 0, false, true); err != nil {
+					log.Error().
+						Str("ip", device.IP).
+						Err(err).
+						Msg("Failed to write suspension status")
+				}
+				
 				timer.Reset(interval) // Reset timer and wait for next cycle
 				continue              // Skip ping logic entirely
 			}
@@ -143,7 +152,7 @@ func performPing(device state.Device, timeout time.Duration, writer PingWriter, 
 		if stateMgr != nil {
 			stateMgr.UpdateLastSeen(device.IP)
 		}
-		if err := writer.WritePingResult(device.IP, stats.AvgRtt, true); err != nil {
+		if err := writer.WritePingResult(device.IP, stats.AvgRtt, true, false); err != nil {
 			log.Error().
 				Str("ip", device.IP).
 				Err(err).
@@ -156,7 +165,7 @@ func performPing(device state.Device, timeout time.Duration, writer PingWriter, 
 			Int("packets_sent", stats.PacketsSent).
 			Dur("avg_rtt", stats.AvgRtt).
 			Msg("Ping failed - no response")
-		if err := writer.WritePingResult(device.IP, 0, false); err != nil {
+		if err := writer.WritePingResult(device.IP, 0, false, false); err != nil {
 			log.Error().
 				Str("ip", device.IP).
 				Err(err).
@@ -239,7 +248,7 @@ func performPingWithCircuitBreaker(device state.Device, timeout time.Duration, w
 			stateMgr.UpdateLastSeen(device.IP)
 		}
 		
-		if err := writer.WritePingResult(device.IP, stats.AvgRtt, true); err != nil {
+		if err := writer.WritePingResult(device.IP, stats.AvgRtt, true, false); err != nil {
 			log.Error().
 				Str("ip", device.IP).
 				Err(err).
@@ -264,7 +273,7 @@ func performPingWithCircuitBreaker(device state.Device, timeout time.Duration, w
 			}
 		}
 		
-		if err := writer.WritePingResult(device.IP, 0, false); err != nil {
+		if err := writer.WritePingResult(device.IP, 0, false, false); err != nil {
 			log.Error().
 				Str("ip", device.IP).
 				Err(err).
