@@ -1,6 +1,7 @@
 package state
 
 import (
+"fmt"
 "testing"
 "time"
 )
@@ -106,10 +107,10 @@ backoff := 5 * time.Minute
 
 // Add and suspend 3 different devices
 for i := 1; i <= 3; i++ {
-ip := "192.168.1." + string(rune('0'+i))
+ip := fmt.Sprintf("192.168.1.%d", i)
 dev := Device{
 IP:       ip,
-Hostname: "device" + string(rune('0'+i)),
+Hostname: fmt.Sprintf("device%d", i),
 LastSeen: time.Now(),
 }
 mgr.Add(dev)
