@@ -913,9 +913,11 @@ netscan is built with production-grade concurrency patterns, comprehensive error
 
 ### Multi-Ticker Event-Driven Design
 
-netscan implements a sophisticated event-driven architecture with five independent, concurrent monitoring workflows orchestrated in `cmd/netscan/main.go`. All tickers run within a single `select` statement in the main event loop and are controlled by a shared context for coordinated graceful shutdown.
+netscan implements a sophisticated event-driven architecture with six independent, concurrent monitoring workflows orchestrated in `cmd/netscan/main.go`. Five workflows are implemented as tickers that run within a single `select` statement in the main event loop, and one workflow consists of background goroutines. All components are controlled by a shared context for coordinated graceful shutdown.
 
-**The Five Tickers:**
+**The Six Monitoring Workflows:**
+
+Five are implemented as tickers, plus background SNMP enrichment:
 
 #### 1. ICMP Discovery Ticker (`icmpDiscoveryTicker`)
 
@@ -1028,6 +1030,27 @@ netscan implements a sophisticated event-driven architecture with five independe
    - InfluxDB connectivity status
    - Successful/failed batch counts
    - Total pings sent
+
+#### 6. Background Operations (Non-Ticker Workflow)
+
+**Trigger:** Launched when ICMP Discovery Ticker finds a new device
+
+**Purpose:** SNMP enrichment for newly discovered devices to collect metadata immediately
+
+**Operation Flow:**
+1. ICMP Discovery Ticker calls `stateMgr.AddDevice(ip)` for each responsive IP
+2. If device is new (`isNew == true`), launches background goroutine immediately
+3. Background goroutine performs SNMP scan via `discovery.RunSNMPScan()`
+4. Queries standard MIB-II OIDs for hostname (sysName) and description (sysDescr)
+5. Writes SNMP results to StateManager via `stateMgr.UpdateDeviceSNMP()`
+6. Writes device info to InfluxDB via `writer.WriteDeviceInfo()`
+
+**Concurrency:** 
+- Each new device gets its own background goroutine for SNMP scanning
+- Goroutines run in parallel without blocking discovery loop
+- Includes panic recovery to prevent single SNMP failure from affecting service
+
+**Note:** This is not a ticker but background goroutines spawned by the ICMP Discovery Ticker. After initial enrichment, continuous SNMP polling is handled by the SNMP Poller Reconciliation Ticker.
 
 ### Core Components
 
