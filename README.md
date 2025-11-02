@@ -1,6 +1,6 @@
 # netscan
 
-Production-grade network monitoring service that performs automated ICMP discovery, continuous ping monitoring, and SNMP metadata collection with time-series storage in InfluxDB.
+network monitoring service that performs automated ICMP discovery, continuous ping monitoring and SNMP metadata collection with time-series storage in InfluxDB.
 
 ---
 
@@ -17,9 +17,8 @@ cd netscan
 cp config.yml.example config.yml
 ```
 
-**3. ⚠️ CRITICAL: Edit Your Network Configuration**
+**3. Edit Your Network Configuration**
 
-> **WARNING:** You must edit `config.yml` and update the `networks:` section with your actual network ranges. The default example network will not discover devices on your network!
 
 Open `config.yml` and modify the `networks:` section:
 ```yaml
@@ -64,7 +63,7 @@ curl http://localhost:8080/health
 **Access InfluxDB UI (optional):**  
 Navigate to **https://localhost** in your browser
 
-> **⚠️ Self-Signed Certificate Warning:** You will see a security warning because the SSL certificate is self-signed (for development/testing). This is expected. Click "Advanced" → "Proceed to localhost" (or similar, depending on your browser) to continue.
+> **Self-Signed Certificate Warning:** 
 
 * Username: `admin`
 * Password: `admin123`
