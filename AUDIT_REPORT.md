@@ -128,14 +128,28 @@ This function is only called when metrics are queried. If `GetSuspendedCount()` 
 
 ### 2.3 PruneStale() - Device Removal
 
-**Location:** `internal/state/manager.go`, lines 288-330
+**Location:** `internal/state/manager.go`, lines 302-340
 
-**Decrement Logic:**
+**Original (BUGGY) Decrement Logic:**
 ```go
 for ip, dev := range m.devices {
     if dev.LastSeen.Before(cutoff) {
+        // BUG: Only decrements for ACTIVELY suspended devices
         if !dev.SuspendedUntil.IsZero() && now.Before(dev.SuspendedUntil) {
-            m.suspendedCount.Add(-1) // ← DECREMENT
+            m.suspendedCount.Add(-1) // ← DECREMENT (only if active)
+        }
+        delete(m.devices, ip)
+    }
+}
+```
+
+**FIXED Decrement Logic:**
+```go
+for ip, dev := range m.devices {
+    if dev.LastSeen.Before(cutoff) {
+        // FIXED: Decrements for ANY suspended device (active or expired)
+        if !dev.SuspendedUntil.IsZero() {
+            m.suspendedCount.Add(-1) // ← DECREMENT (active or expired)
         }
         delete(m.devices, ip)
     }
@@ -143,11 +157,13 @@ for ip, dev := range m.devices {
 ```
 
 **Analysis:**
-- Decrements when removing devices that are actively suspended
-- Correctly checks suspension is NOT expired before decrementing
-- Called by pruning ticker every hour (per copilot-instructions.md)
+- **BUG IDENTIFIED**: Original code only decremented for ACTIVELY suspended devices (`now.Before(dev.SuspendedUntil)`)
+- **Problem**: If suspension expires and THEN device is pruned 24 hours later, counter not decremented
+- **Impact**: Permanent counter orphaning - device deleted but count remains inflated
+- **FIX**: Changed condition to `!dev.SuspendedUntil.IsZero()` to catch both active AND expired suspensions
+- **Rationale**: Any device with SuspendedUntil set (non-zero) contributed to the counter at some point, so it must be decremented when pruned regardless of expiration status
 
-**Verdict:** Code is correct.
+**Verdict:** **BUG FIXED** - Now correctly decrements for both active and expired suspensions
 
 ### 2.4 Add() - State Transition from Suspended to Not Suspended
 
@@ -249,11 +265,11 @@ Created comprehensive tests to validate all scenarios:
 
 ## Conclusions
 
-### Summary of Findings - BUG IDENTIFIED
+### Summary of Findings - TWO BUGS IDENTIFIED AND FIXED
 
-#### Critical Bug Found in Add() Method
+#### Critical Bug #1: Add() Method - Expired Suspensions
 
-**Location:** `internal/state/manager.go`, lines 103-115
+**Location:** `internal/state/manager.go`, lines 89-108 (Add method)
 
 **The Bug:**
 When the `Add()` method is called to update an existing device that has an EXPIRED suspension (SuspendedUntil is set but in the past), the atomic counter is NOT decremented even though the device should no longer be counted as suspended.
@@ -269,50 +285,59 @@ This evaluates to `false` if the suspension has EXPIRED (now >= SuspendedUntil),
 2. The device's `SuspendedUntil` field is still set (not yet cleaned up by `cleanupExpiredSuspensions()`)
 3. The incoming device update has no suspension
 
-**Scenario That Triggers the Bug:**
-1. Device is suspended at time T0, SuspendedUntil = T0 + 5min, counter = 1
-2. Time passes to T0 + 6min (suspension expires naturally)
-3. `GetSuspendedCount()` has NOT been called yet, so `cleanupExpiredSuspensions()` hasn't run
-4. Device's `SuspendedUntil` is still set to T0 + 5min (in the past)
-5. `Add()` is called with updated device info (e.g., hostname update)
-6. Code checks: `wasActivelySuspended` = false (suspension expired)
-7. Code checks: `willBeActivelySuspended` = false (new device not suspended)
-8. Neither increment nor decrement branch executes
-9. **Counter remains at 1, but accurate count is 0** ← BUG
+**Impact:**
+Counter inflation that persists until cleanup runs or device recovers.
 
-**Proof:**
-Test `TestBugFoundAdd_ExpiredSuspensionNotDecremented` demonstrates the bug:
-- Creates device, suspends it (counter = 1)
-- Waits for suspension to expire
-- Calls `Add()` with updated device
-- Result: Cached atomic counter = 1, Accurate count = 0
+**Fix:**
+Added cleanup of expired suspensions in existing device BEFORE state transition checks.
+
+#### Critical Bug #2: PruneStale() Method - Expired Suspensions
+
+**Location:** `internal/state/manager.go`, lines 302-340 (Prune/PruneStale methods)
+
+**The Bug:**
+When `PruneStale()` removes a device that has an EXPIRED suspension, it only decrements the counter if the suspension is ACTIVELY suspended (in the future). If the suspension expired before pruning, the counter is NOT decremented but the device IS deleted, causing permanent counter orphaning.
+
+**Root Cause:**
+The pruning logic checks for active suspension:
+```go
+if !dev.SuspendedUntil.IsZero() && now.Before(dev.SuspendedUntil) {
+    m.suspendedCount.Add(-1)
+}
+```
+
+This means:
+1. Device is suspended at T0, counter = 1
+2. Suspension expires at T0 + 5min
+3. Device is pruned at T0 + 24 hours (stale)
+4. Condition fails (suspension expired), counter NOT decremented
+5. Device deleted with counter still at 1 ← PERMANENT ORPHAN
 
 **Impact:**
-This bug causes PERMANENT counter inflation that persists until:
-1. `GetSuspendedCount()` is called (triggers cleanup which clears SuspendedUntil)
-2. `ReportPingSuccess()` is called (decrements if SuspendedUntil not zero)
-3. Device is pruned (decrements if actively suspended)
+PERMANENT counter inflation. This is the root cause of `health_metrics.suspended_devices` being high while queries for `ping...suspended=true` return 0.
 
-In production, if health metrics are queried regularly (every 10s), the bug's impact is mitigated because `cleanupExpiredSuspensions()` will clear expired suspensions. However, the counter can still be temporarily inflated between expiration and cleanup.
-
-More critically, if a device is updated via `Add()` between expiration and cleanup, the counter becomes PERMANENTLY inflated (until one of the recovery paths above is triggered).
+**Fix:**
+Changed condition to `!dev.SuspendedUntil.IsZero()` to catch both active AND expired suspensions before deletion.
 
 #### Other Findings
 
 1. **Increment paths are correct** - All paths that increment the counter have proper guards against duplicate increments
-2. **Most decrement paths are correct** - `ReportPingSuccess()`, `Prune()`, eviction paths work correctly
+2. **Other decrement paths are correct** - `ReportPingSuccess()`, eviction paths work correctly
 3. **cleanupExpiredSuspensions() is correct** - Properly identifies and cleans up expired suspensions
 4. **Thread-safety is correct** - All counter modifications are protected by mutex
-5. **The ONLY bug is in Add()** - State transition logic for expired suspensions
+5. **TWO BUGS FIXED** - Both Add() and PruneStale() had expired suspension handling bugs
 
 ### Recommendations
 
-1. **✅ FIXED:** Modified `Add()` method to clean up expired suspensions in existing device before checking state transitions
-2. **✅ TESTED:** Added comprehensive test `TestBugFixed_ExpiredSuspensionNowDecremented` to prevent regression
-3. **Documentation:** Update comments in `Add()` to explain handling of expired suspensions
-4. **Future:** Consider periodic background cleanup of expired suspensions (not just on demand)
+1. **✅ FIXED #1:** Modified `Add()` method to clean up expired suspensions in existing device before checking state transitions
+2. **✅ FIXED #2:** Modified `PruneStale()` method to decrement counter for ANY suspended device (active or expired) before deletion
+3. **✅ TESTED:** Added comprehensive tests for both fixes to prevent regression
+4. **✅ DOCUMENTATION:** Updated code comments to explain why both fixes are necessary
+5. **Future:** Consider periodic background cleanup of expired suspensions (not just on demand)
 
 ### Bug Fix Implementation
+
+#### Fix #1: Add() Method
 
 **File:** `internal/state/manager.go`  
 **Method:** `Add(device Device)`  
@@ -342,10 +367,42 @@ if !existing.SNMPSuspendedUntil.IsZero() && !now.Before(existing.SNMPSuspendedUn
 - Checks if existing device has any suspension (active or expired)
 - If suspension is expired (now >= SuspendedUntil), decrements counter and clears state
 - Ensures counter stays in sync even if `cleanupExpiredSuspensions()` hasn't run yet
-- Prevents permanent counter inflation when devices are updated via `Add()`
+- Prevents temporary counter inflation when devices are updated via `Add()`
+
+#### Fix #2: PruneStale() Method
+
+**File:** `internal/state/manager.go`  
+**Method:** `Prune(olderThan time.Duration)` (aliased as `PruneStale`)  
+**Lines Changed:** 302-340
+
+**The Fix:**
+Changed decrement condition from checking active suspension to checking ANY suspension:
+
+**Before (BUGGY):**
+```go
+if !dev.SuspendedUntil.IsZero() && now.Before(dev.SuspendedUntil) {
+    m.suspendedCount.Add(-1)  // Only if actively suspended
+}
+```
+
+**After (FIXED):**
+```go
+if !dev.SuspendedUntil.IsZero() {
+    m.suspendedCount.Add(-1)  // If ANY suspension (active or expired)
+}
+```
+
+**Why This Works:**
+- Any device with SuspendedUntil set contributed to the counter when suspended
+- Must decrement counter when device is deleted, regardless of suspension expiration
+- Prevents PERMANENT counter orphaning when expired-suspended devices are pruned
+- This is the root cause of the production issue: `health_metrics.suspended_devices` high while `ping...suspended=true` queries return 0
 
 **Test Coverage:**
-- `TestBugFixed_ExpiredSuspensionNowDecremented` - Validates the fix
+- `TestBugFixed_ExpiredSuspensionNowDecremented` - Validates Add() fix
+- `TestPruneStale_ExpiredSuspension` - Validates PruneStale() fix for expired suspensions
+- `TestPruneStale_ActiveSuspension` - Validates PruneStale() still works for active suspensions
+- `TestPruneStale_NoSuspension` - Validates PruneStale() doesn't affect non-suspended devices
 - All existing tests still pass - no regressions introduced
 
 ### Answer to Problem Statement
@@ -362,18 +419,28 @@ if !existing.SNMPSuspendedUntil.IsZero() && !now.Before(existing.SNMPSuspendedUn
 **A2:** Six paths should decrement:
 1. `ReportPingSuccess()` lines 351-352 - Device recovery (works correctly)
 2. `cleanupExpiredSuspensions()` lines 410-413 - Expired suspensions (works correctly)
-3. `Prune()` lines 303-305 - Device removal (works correctly)
-4. `Add()` lines 113-114 - State transition from suspended **← BUG HERE**
+3. `Prune()` / `PruneStale()` lines 302-340 - Device removal **← BUG #2 FIXED HERE**
+4. `Add()` lines 89-108 - State transition from suspended **← BUG #1 FIXED HERE**
 5. `Add()` lines 142-144 - Eviction during Add (works correctly)
 6. `AddDevice()` lines 202-204 - Eviction during AddDevice (works correctly)
 
 **Q3: Explain *why* these paths are failing to decrement the count.**
 
-**A3:** The `Add()` method's state transition logic (path #4 above) FAILS to decrement when:
+**A3:** TWO bugs were identified and fixed:
+
+**Bug #1 - Add() method:** The state transition logic (path #4 above) FAILED to decrement when:
 - Existing device has an EXPIRED suspension (SuspendedUntil set but in the past)
 - New device is not suspended
 - The check `wasActivelySuspended` returns false because suspension is expired
 - Decrement branch is not executed
 - Counter remains inflated even though device is no longer suspended
+- **FIX:** Added cleanup of expired suspensions before state transition checks
 
-This is the ROOT CAUSE of the permanently inflated counter described in the problem statement.
+**Bug #2 - PruneStale() method:** The pruning logic (path #3 above) FAILED to decrement when:
+- Device being pruned has an EXPIRED suspension (SuspendedUntil set but in the past)
+- The check `now.Before(dev.SuspendedUntil)` returns false because suspension is expired
+- Decrement is skipped
+- Device is DELETED but counter remains inflated ← PERMANENT ORPHAN
+- **FIX:** Changed condition from checking active suspension to checking ANY suspension (`!dev.SuspendedUntil.IsZero()`)
+
+Bug #2 is the PRIMARY ROOT CAUSE of the production issue where `health_metrics.suspended_devices` is high while queries for `ping...suspended=true` return 0. When devices with expired suspensions are pruned after 24 hours, the counter is orphaned permanently.

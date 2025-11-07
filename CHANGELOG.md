@@ -9,14 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Critical bug in suspended_devices counter**: Fixed permanent counter inflation in health metrics
+- **Critical bug #1 in suspended_devices counter - Add() method**: Fixed counter inflation when updating devices with expired suspensions
   - **Bug**: `Add()` method failed to decrement `suspended_devices` counter when updating devices with expired suspensions
   - **Root cause**: State transition logic only checked for ACTIVE suspensions (SuspendedUntil in future), ignoring expired suspensions
-  - **Impact**: Counter could become permanently inflated when devices were updated after suspension expired but before cleanup ran
+  - **Impact**: Counter could become temporarily inflated when devices were updated after suspension expired but before cleanup ran
   - **Fix**: `Add()` now cleans up expired suspensions in existing device before state transition checks, ensuring counter stays accurate
   - **Test coverage**: Added `TestBugFixed_ExpiredSuspensionNowDecremented` to prevent regression
   - **Files changed**: `internal/state/manager.go` (lines 89-108)
-  - **Documentation**: Added comprehensive audit report in `AUDIT_REPORT.md`
+
+- **Critical bug #2 in suspended_devices counter - PruneStale() method**: Fixed PERMANENT counter orphaning when pruning devices with expired suspensions
+  - **Bug**: `PruneStale()` failed to decrement `suspended_devices` counter when removing devices with expired suspensions
+  - **Root cause**: Pruning logic only decremented for ACTIVELY suspended devices (`now.Before(SuspendedUntil)`), causing counter orphaning when expired-suspended devices were pruned
+  - **Impact**: PERMANENT counter inflation - devices deleted but counter not decremented, explaining production issue where `health_metrics.suspended_devices` is high while `ping...suspended=true` queries return 0
+  - **Fix**: Changed condition to `!dev.SuspendedUntil.IsZero()` to decrement for ANY suspended device (active or expired) before deletion
+  - **Test coverage**: Added `TestPruneStale_ExpiredSuspension`, `TestPruneStale_ActiveSuspension`, `TestPruneStale_NoSuspension`
+  - **Files changed**: `internal/state/manager.go` (lines 302-340)
+  - **Documentation**: Updated `AUDIT_REPORT.md` with both bug analyses and fixes
 
 ### Added
 

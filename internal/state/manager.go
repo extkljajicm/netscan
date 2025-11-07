@@ -306,7 +306,6 @@ func (m *Manager) Prune(olderThan time.Duration) []Device {
 	defer m.mu.Unlock()
 	var removed []Device
 	cutoff := time.Now().Add(-olderThan)
-	now := time.Now()
 	
 	// Collect devices to remove
 	var toRemove []*Device
@@ -315,13 +314,17 @@ func (m *Manager) Prune(olderThan time.Duration) []Device {
 			removed = append(removed, *dev)
 			toRemove = append(toRemove, dev)
 			
-			// If the pruned device was actively ping-suspended, decrement counter
-			if !dev.SuspendedUntil.IsZero() && now.Before(dev.SuspendedUntil) {
+			// If the pruned device has a suspension (active or expired), decrement counter
+			// This catches both active suspensions (SuspendedUntil in future) and expired
+			// suspensions (SuspendedUntil in past) to prevent orphaned counts when devices
+			// are deleted after their suspension expires but before cleanup runs
+			if !dev.SuspendedUntil.IsZero() {
 				m.suspendedCount.Add(-1)
 			}
 			
-			// If the pruned device had SNMP actively suspended, decrement counter
-			if !dev.SNMPSuspendedUntil.IsZero() && now.Before(dev.SNMPSuspendedUntil) {
+			// If the pruned device has SNMP suspension (active or expired), decrement counter
+			// Same logic as ping suspension - catches both active and expired to prevent orphans
+			if !dev.SNMPSuspendedUntil.IsZero() {
 				m.snmpSuspendedCount.Add(-1)
 			}
 			
