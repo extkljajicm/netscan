@@ -1,6 +1,7 @@
 package state
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -85,7 +86,7 @@ func TestDoubleDecrementMultipleDevices(t *testing.T) {
 	// Add 5 devices
 	for i := 1; i <= 5; i++ {
 		dev := Device{
-			IP:       "192.168.1." + string(rune(i)),
+			IP:       fmt.Sprintf("192.168.1.%d", i),
 			Hostname: "device",
 			LastSeen: time.Now(),
 		}
@@ -96,7 +97,7 @@ func TestDoubleDecrementMultipleDevices(t *testing.T) {
 	maxFails := 3
 	backoff := 100 * time.Millisecond
 	for i := 1; i <= 5; i++ {
-		ip := "192.168.1." + string(rune(i))
+		ip := fmt.Sprintf("192.168.1.%d", i)
 		for j := 0; j < maxFails; j++ {
 			mgr.ReportPingFail(ip, maxFails, backoff)
 		}
@@ -118,7 +119,7 @@ func TestDoubleDecrementMultipleDevices(t *testing.T) {
 
 	// Now report successful pings for all 5 devices
 	for i := 1; i <= 5; i++ {
-		ip := "192.168.1." + string(rune(i))
+		ip := fmt.Sprintf("192.168.1.%d", i)
 		mgr.ReportPingSuccess(ip)
 	}
 
