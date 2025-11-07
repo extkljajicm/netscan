@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Critical bug in suspended_devices counter**: Fixed permanent counter inflation in health metrics
+  - **Bug**: `Add()` method failed to decrement `suspended_devices` counter when updating devices with expired suspensions
+  - **Root cause**: State transition logic only checked for ACTIVE suspensions (SuspendedUntil in future), ignoring expired suspensions
+  - **Impact**: Counter could become permanently inflated when devices were updated after suspension expired but before cleanup ran
+  - **Fix**: `Add()` now cleans up expired suspensions in existing device before state transition checks, ensuring counter stays accurate
+  - **Test coverage**: Added `TestBugFixed_ExpiredSuspensionNowDecremented` to prevent regression
+  - **Files changed**: `internal/state/manager.go` (lines 89-108)
+  - **Documentation**: Added comprehensive audit report in `AUDIT_REPORT.md`
+
 ### Added
 
 - **Docker log rotation**: Configured automatic log rotation for netscan service in docker-compose.yml
