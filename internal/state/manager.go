@@ -89,6 +89,21 @@ func (m *Manager) Add(device Device) {
 	if existing, exists := m.devices[device.IP]; exists {
 		now := time.Now()
 		
+		// Clean up expired suspensions in the EXISTING device before comparison
+		// This ensures the counter is decremented for expired suspensions
+		if !existing.SuspendedUntil.IsZero() && !now.Before(existing.SuspendedUntil) {
+			// Expired ping suspension - decrement counter and clear
+			m.suspendedCount.Add(-1)
+			existing.SuspendedUntil = time.Time{}
+			existing.ConsecutiveFails = 0
+		}
+		if !existing.SNMPSuspendedUntil.IsZero() && !now.Before(existing.SNMPSuspendedUntil) {
+			// Expired SNMP suspension - decrement counter and clear
+			m.snmpSuspendedCount.Add(-1)
+			existing.SNMPSuspendedUntil = time.Time{}
+			existing.SNMPConsecutiveFails = 0
+		}
+		
 		// Clean up expired suspensions in the incoming device before comparison
 		if !device.SuspendedUntil.IsZero() && !now.Before(device.SuspendedUntil) {
 			device.SuspendedUntil = time.Time{}
@@ -100,6 +115,7 @@ func (m *Manager) Add(device Device) {
 		}
 		
 		// Track suspension state changes for atomic counter
+		// After cleanup, check if state is changing
 		wasActivelySuspended := !existing.SuspendedUntil.IsZero() && now.Before(existing.SuspendedUntil)
 		willBeActivelySuspended := !device.SuspendedUntil.IsZero() && now.Before(device.SuspendedUntil)
 		

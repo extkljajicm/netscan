@@ -249,36 +249,131 @@ Created comprehensive tests to validate all scenarios:
 
 ## Conclusions
 
-### Summary of Findings
+### Summary of Findings - BUG IDENTIFIED
+
+#### Critical Bug Found in Add() Method
+
+**Location:** `internal/state/manager.go`, lines 103-115
+
+**The Bug:**
+When the `Add()` method is called to update an existing device that has an EXPIRED suspension (SuspendedUntil is set but in the past), the atomic counter is NOT decremented even though the device should no longer be counted as suspended.
+
+**Root Cause:**
+The state transition logic checks `wasActivelySuspended` using this condition:
+```go
+wasActivelySuspended := !existing.SuspendedUntil.IsZero() && now.Before(existing.SuspendedUntil)
+```
+
+This evaluates to `false` if the suspension has EXPIRED (now >= SuspendedUntil), even though:
+1. The device was previously counted as suspended (counter was incremented)
+2. The device's `SuspendedUntil` field is still set (not yet cleaned up by `cleanupExpiredSuspensions()`)
+3. The incoming device update has no suspension
+
+**Scenario That Triggers the Bug:**
+1. Device is suspended at time T0, SuspendedUntil = T0 + 5min, counter = 1
+2. Time passes to T0 + 6min (suspension expires naturally)
+3. `GetSuspendedCount()` has NOT been called yet, so `cleanupExpiredSuspensions()` hasn't run
+4. Device's `SuspendedUntil` is still set to T0 + 5min (in the past)
+5. `Add()` is called with updated device info (e.g., hostname update)
+6. Code checks: `wasActivelySuspended` = false (suspension expired)
+7. Code checks: `willBeActivelySuspended` = false (new device not suspended)
+8. Neither increment nor decrement branch executes
+9. **Counter remains at 1, but accurate count is 0** ← BUG
+
+**Proof:**
+Test `TestBugFoundAdd_ExpiredSuspensionNotDecremented` demonstrates the bug:
+- Creates device, suspends it (counter = 1)
+- Waits for suspension to expire
+- Calls `Add()` with updated device
+- Result: Cached atomic counter = 1, Accurate count = 0
+
+**Impact:**
+This bug causes PERMANENT counter inflation that persists until:
+1. `GetSuspendedCount()` is called (triggers cleanup which clears SuspendedUntil)
+2. `ReportPingSuccess()` is called (decrements if SuspendedUntil not zero)
+3. Device is pruned (decrements if actively suspended)
+
+In production, if health metrics are queried regularly (every 10s), the bug's impact is mitigated because `cleanupExpiredSuspensions()` will clear expired suspensions. However, the counter can still be temporarily inflated between expiration and cleanup.
+
+More critically, if a device is updated via `Add()` between expiration and cleanup, the counter becomes PERMANENTLY inflated (until one of the recovery paths above is triggered).
+
+#### Other Findings
 
 1. **Increment paths are correct** - All paths that increment the counter have proper guards against duplicate increments
-2. **Decrement paths are correct** - All paths that should decrement do so correctly
-3. **No double-decrement bugs** - The cleanup function clears `SuspendedUntil` after decrementing, preventing double-decrements
+2. **Most decrement paths are correct** - `ReportPingSuccess()`, `Prune()`, eviction paths work correctly
+3. **cleanupExpiredSuspensions() is correct** - Properly identifies and cleans up expired suspensions
 4. **Thread-safety is correct** - All counter modifications are protected by mutex
-5. **Potential temporary inflation** - Counter may be temporarily inflated between suspension expiry and next `GetSuspendedCount()` call, but this is corrected automatically
+5. **The ONLY bug is in Add()** - State transition logic for expired suspensions
 
 ### Recommendations
 
-Based on this audit, the following recommendations are made:
+1. **✅ FIXED:** Modified `Add()` method to clean up expired suspensions in existing device before checking state transitions
+2. **✅ TESTED:** Added comprehensive test `TestBugFixed_ExpiredSuspensionNowDecremented` to prevent regression
+3. **Documentation:** Update comments in `Add()` to explain handling of expired suspensions
+4. **Future:** Consider periodic background cleanup of expired suspensions (not just on demand)
 
-1. **Monitor health metric query frequency** - Ensure `GetSuspendedCount()` is called regularly (currently every 10s via health reporting)
-2. **Add explicit cleanup calls** - Consider calling `cleanupExpiredSuspensions()` from more locations (e.g., `IsSuspended()`) to keep counter more accurate
-3. **Documentation** - Add comments explaining the dependency between `cleanupExpiredSuspensions()` and `ReportPingSuccess()` to prevent future bugs
-4. **Integration testing** - Add tests that simulate the full lifecycle including health metric reporting
+### Bug Fix Implementation
+
+**File:** `internal/state/manager.go`  
+**Method:** `Add(device Device)`  
+**Lines Changed:** 89-108
+
+**The Fix:**
+Added cleanup of expired suspensions in the EXISTING device before checking state transitions:
+
+```go
+// Clean up expired suspensions in the EXISTING device before comparison
+// This ensures the counter is decremented for expired suspensions
+if !existing.SuspendedUntil.IsZero() && !now.Before(existing.SuspendedUntil) {
+    // Expired ping suspension - decrement counter and clear
+    m.suspendedCount.Add(-1)
+    existing.SuspendedUntil = time.Time{}
+    existing.ConsecutiveFails = 0
+}
+if !existing.SNMPSuspendedUntil.IsZero() && !now.Before(existing.SNMPSuspendedUntil) {
+    // Expired SNMP suspension - decrement counter and clear
+    m.snmpSuspendedCount.Add(-1)
+    existing.SNMPSuspendedUntil = time.Time{}
+    existing.SNMPConsecutiveFails = 0
+}
+```
+
+**Why This Works:**
+- Checks if existing device has any suspension (active or expired)
+- If suspension is expired (now >= SuspendedUntil), decrements counter and clears state
+- Ensures counter stays in sync even if `cleanupExpiredSuspensions()` hasn't run yet
+- Prevents permanent counter inflation when devices are updated via `Add()`
+
+**Test Coverage:**
+- `TestBugFixed_ExpiredSuspensionNowDecremented` - Validates the fix
+- All existing tests still pass - no regressions introduced
 
 ### Answer to Problem Statement
 
-**Q: Why do paths fail to decrement the count?**
+**Q1: Identify the specific code paths responsible for *incrementing* the suspended_devices count.**
 
-**A:** Based on comprehensive code analysis and testing, the decrement paths do NOT fail. The implementation correctly decrements the counter in all scenarios:
-- Device recovery (active or expired suspension)
-- Device pruning
-- Device eviction
-- State transitions
+**A1:** Three paths increment the counter:
+1. `ReportPingFail()` lines 361-389 - When circuit breaker trips (with duplicate-increment protection)
+2. `Add()` lines 111-112 - When updating device that transitions to suspended state
+3. `Add()` lines 170-172 - When adding new device that is actively suspended
 
-The counter is managed via an atomic Int32 with proper synchronization. All increment and decrement operations are protected by mutex and have appropriate guards against duplicate operations.
+**Q2: Audit the code paths that *should* be *decrementing* the count (specifically, device recovery and device pruning).**
 
-If there is a bug in production, it is not evident from the code paths analyzed in this audit. Further investigation would require:
-1. Production logs showing actual counter inflation
-2. Specific scenarios that reproduce the issue
-3. Analysis of the full system including health metric collection frequency
+**A2:** Six paths should decrement:
+1. `ReportPingSuccess()` lines 351-352 - Device recovery (works correctly)
+2. `cleanupExpiredSuspensions()` lines 410-413 - Expired suspensions (works correctly)
+3. `Prune()` lines 303-305 - Device removal (works correctly)
+4. `Add()` lines 113-114 - State transition from suspended **← BUG HERE**
+5. `Add()` lines 142-144 - Eviction during Add (works correctly)
+6. `AddDevice()` lines 202-204 - Eviction during AddDevice (works correctly)
+
+**Q3: Explain *why* these paths are failing to decrement the count.**
+
+**A3:** The `Add()` method's state transition logic (path #4 above) FAILS to decrement when:
+- Existing device has an EXPIRED suspension (SuspendedUntil set but in the past)
+- New device is not suspended
+- The check `wasActivelySuspended` returns false because suspension is expired
+- Decrement branch is not executed
+- Counter remains inflated even though device is no longer suspended
+
+This is the ROOT CAUSE of the permanently inflated counter described in the problem statement.
